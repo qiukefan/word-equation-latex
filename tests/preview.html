@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline equation preview tests</title>
+<style>
+body{font:14px system-ui;max-width:1280px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:1100px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}
+</style>
+<h1>Offline equation preview tests</h1>
+<p>Exercises the built HTML with synthetic formulas. No user documents or system clipboard are accessed.</p>
+<p id="summary">Loading the built HTML…</p><ol id="results"></ol>
+<iframe id="app" title="Equation preview under test" src="../dist/index.html"></iframe>
+<script>
+'use strict';
+globalThis.previewResults=[];
+globalThis.previewComplete=false;
+const frame=document.getElementById('app');
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document;
+  const $=id=>doc.getElementById(id);
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const nextFrame=()=>new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));
+  const reference=String.raw`\sum_{k=0}^{n}\binom{n}{k}x^{n-k}y^k=(x+y)^n`;
+  const setFormula=async(latex)=>{
+    $('outputCode').value=latex;
+    $('outputCode').dispatchEvent(new win.Event('input',{bubbles:true}));
+    await doc.fonts.ready; await nextFrame();
+  };
+  const scale=()=>Number(win.getComputedStyle($('preview')).getPropertyValue('--preview-scale').trim());
+  const reset=async()=>{
+    const card=doc.querySelector('.preview-card');
+    if(card?.classList.contains('is-expanded'))$('previewExpand').click();
+    $('clearButton').click();
+    $('outputMode').value='raw';$('outputMode').dispatchEvent(new win.Event('change',{bubbles:true}));
+    $('previewZoomReset')?.click();await nextFrame();
+  };
+  async function test(name,body){
+    try{await reset();await body();previewResults.push({name,pass:true});}
+    catch(error){previewResults.push({name,pass:false,error:error.message});}
+    const result=previewResults.at(-1),li=document.createElement('li');
+    li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const detail=document.createElement('code');detail.textContent=result.error;li.append(detail);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=previewResults.filter(r=>r.pass).length+' / '+previewResults.length+' passed';
+  }
+  try{
+    await test('Generic binomial identity uses TeX typesetting and retains accessible MathML',async()=>{
+      await setFormula(reference);
+      assert($('preview').querySelector('.katex-html'),'HTML math rendering was not produced');
+      assert($('preview').querySelector('math'),'Accessible MathML was removed');
+      assert(!$('preview').querySelector('.preview-error'),'The reference formula failed to render');
+      assert($('outputCode').value===reference,'Rendering changed the source formula');
+      const visual=$('preview').querySelector('.katex-html');
+      assert(visual.getBoundingClientRect().height>25,'Formula rendering is unexpectedly small or collapsed');
+      const accessible=$('preview').querySelector('.katex-mathml');
+      assert(win.getComputedStyle(accessible).position==='absolute','MathML is not visually hidden; formula may render twice');
+    });
+    await test('TeX fonts load from embedded data without external font or script dependencies',async()=>{
+      await setFormula(reference);
+      const fontRules=[...doc.styleSheets].flatMap(sheet=>[...sheet.cssRules]).filter(rule=>rule.type===win.CSSRule.FONT_FACE_RULE);
+      assert(fontRules.length>=10,'Expected a bundled set of mathematical fonts');
+      for(const rule of fontRules){
+        const src=rule.style.getPropertyValue('src');
+        const urls=[...src.matchAll(/url\(([^)]+)\)/g)].map(match=>match[1].trim().replace(/^["']|["']$/g,''));
+        assert(urls.length>0&&urls.every(url=>url.startsWith('data:font/woff2;base64,')),'Non-embedded font dependency: '+rule.style.getPropertyValue('font-family'));
+      }
+      assert(!doc.querySelector('script[src],link[rel="stylesheet"]'),'Standalone app references external code or stylesheet');
+      const activeFonts=[...doc.fonts].filter(font=>font.family.includes('KaTeX')&&font.status==='loaded');
+      assert(activeFonts.length>=2,'The preview did not load its embedded TeX fonts');
+      const requests=win.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));
+      assert(!requests.some(entry=>/\.(?:woff2?|ttf|js|css)(?:[?#]|$)/.test(entry.name)),'A rendering asset was requested over HTTP');
+    });
+    await test('Zoom visibly enlarges the formula while preserving source code',async()=>{
+      await setFormula(String.raw`\frac{a+b}{\sqrt{x^2+y^2}}`);
+      $('previewZoomReset').click();await nextFrame();
+      const original=$('outputCode').value;
+      const before=$('preview').querySelector('.katex-html').getBoundingClientRect().width;
+      $('previewZoomIn').click();await nextFrame();
+      const after=$('preview').querySelector('.katex-html').getBoundingClientRect().width;
+      assert(after>before*1.04,'Zoom control did not enlarge the visible formula');
+      assert(scale()>1,'Zoom value did not increase above 100%');
+      assert($('outputCode').value===original,'Zoom modified the formula source');
+      $('previewZoomReset').click();await nextFrame();
+      const restored=$('preview').querySelector('.katex-html').getBoundingClientRect().width;
+      assert(Math.abs(restored-before)<2,'Reset did not restore original preview size');
+      assert(Math.abs(scale()-1)<0.001,'Reset did not restore 100%');
+    });
+    await test('Zoom is bounded and never produces a hidden or negative formula',async()=>{
+      await setFormula(String.raw`x^{2}+y^{2}=r^{2}`);
+      for(let i=0;i<40;i++)$('previewZoomIn').click();
+      assert(scale()<=2.001&&scale()>=1.99,'Zoom upper bound is not 200%: '+scale());
+      for(let i=0;i<50;i++)$('previewZoomOut').click();
+      assert(scale()>=0.499&&scale()<=0.501,'Zoom lower bound is not 50%: '+scale());
+      assert($('preview').querySelector('.katex-html').getBoundingClientRect().height>0,'Bounded preview collapsed');
+    });
+    await test('Fit reduces a long formula without rewriting its LaTeX',async()=>{
+      $('previewZoomReset').click();await nextFrame();
+      const preview=$('preview'),css=win.getComputedStyle(preview);
+      const available=preview.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight);
+      assert(available>0,'Preview has no measurable content width');
+      let longFormula='',formulaWidth=0;
+      for(let terms=8;terms<=128;terms*=2){
+        longFormula=Array(terms).fill(String.raw`\frac{x^{2}+y^{2}}{1+x^{2}}`).join('+');
+        await setFormula(longFormula);
+        formulaWidth=preview.querySelector('.katex-display').getBoundingClientRect().width;
+        if(formulaWidth>available*1.1)break;
+      }
+      assert(formulaWidth>available,'Synthetic formula does not overflow: '+formulaWidth+'px in '+available+'px');
+      $('previewFit').click();await nextFrame();
+      assert(scale()<1&&scale()>=0.499,'Fit did not reduce the overflowing formula: '+scale());
+      assert(preview.querySelector('.katex-display').getBoundingClientRect().width<formulaWidth,'Fit did not shrink the visible formula');
+      assert($('outputCode').value===longFormula,'Fit changed the expression instead of its view');
+      assert(!$('preview').querySelector('.preview-error'),'Long formula failed to render');
+    });
+    await test('Expanded preview can be opened and closed without losing the current formula',async()=>{
+      await setFormula(reference);const original=$('outputCode').value;
+      const card=doc.querySelector('.preview-card');
+      $('previewExpand').click();await nextFrame();
+      assert(card.classList.contains('is-expanded'),'Expand did not open the large preview');
+      assert($('preview').querySelector('.katex-html'),'Expanded preview lost its formula');
+      $('previewExpand').click();await nextFrame();
+      assert(!card.classList.contains('is-expanded'),'Expanded preview did not close');
+      assert($('outputCode').value===original,'Expanding or closing changed the formula');
+    });
+    await test('Malformed input reports an error and a subsequent valid equation recovers',async()=>{
+      await setFormula(String.raw`\frac{a}{`);
+      assert($('preview').querySelector('.preview-error'),'Malformed formula did not show a readable error');
+      assert(!$('preview').querySelector('.katex-html'),'A previous formula remained visible after an error');
+      await setFormula(String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`);
+      assert($('preview').querySelector('.katex-html')&&!$('preview').querySelector('.preview-error'),'Valid matrix did not recover after the error');
+    });
+    await test('Saved offline HTML includes fonts and resets the expanded preview state',async()=>{
+      await setFormula(reference);$('previewZoomIn').click();$('previewExpand').click();
+      let captured=null;const originalURL=win.URL.createObjectURL,originalClick=win.HTMLAnchorElement.prototype.click;
+      win.URL.createObjectURL=function(blob){captured=blob;return originalURL.call(win.URL,blob);};
+      win.HTMLAnchorElement.prototype.click=function(){};
+      try{$('downloadApp').click();}finally{win.URL.createObjectURL=originalURL;win.HTMLAnchorElement.prototype.click=originalClick;}
+      assert(captured,'No offline HTML was generated');
+      const saved=await captured.text(),parsed=new win.DOMParser().parseFromString(saved,'text/html');
+      assert(saved.includes('data:font/woff2;base64,'),'Saved HTML lost its fonts');
+      assert(!parsed.querySelector('.preview-card.is-expanded'),'Saved HTML is stuck in an expanded preview');
+      assert(!parsed.querySelector('#preview .katex-html'),'Saved HTML contains the previous formula');
+      assert(parsed.getElementById('outputCode').textContent==='','Saved HTML retained the output code');
+    });
+  }catch(error){previewResults.push({name:'Harness',pass:false,error:error.message});}
+  document.getElementById('summary').textContent=previewResults.filter(r=>r.pass).length+' / '+previewResults.length+' passed — complete';
+  globalThis.previewComplete=true;
+  // Leave the reference formula ready for visual review after the test report.
+  await reset();await setFormula(reference);
+});
+</script>
+</html>

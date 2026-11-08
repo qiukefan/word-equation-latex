@@ -1,0 +1,16 @@
+# Personal files and local tooling
+.DS_Store
+.openai/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.docx
+*.doc
+*.ai
+tests/generated/
+illustrator-plugin/

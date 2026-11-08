@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local document processing and CSP tests</title>
+<style>
+body{font:14px/1.65 system-ui;max-width:1200px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:650px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}
+</style>
+<h1>Local document processing and network blocking</h1>
+<p>Tests the exact GitHub Pages build. A minimal synthetic DOCX is created in memory; no user files or clipboard are read. The final test fetches a public SVG from this local server as a control, then verifies that the protected app cannot fetch the exact same URL. No document content is transmitted.</p>
+<p id="summary">Loading the GitHub Pages build…</p><ol id="results"></ol>
+<iframe id="app" title="GitHub Pages application under test" src="../docs/index.html"></iframe>
+<script>
+'use strict';
+globalThis.privacyResults=[];
+globalThis.privacyComplete=false;
+const frame=document.getElementById('app');
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document,$=id=>doc.getElementById(id);
+  const violations=[];
+  doc.addEventListener('securitypolicyviolation',event=>violations.push({directive:event.effectiveDirective,blockedURI:event.blockedURI}));
+  const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const waitFor=async(condition,label)=>{const start=performance.now();while(!condition()){if(performance.now()-start>10000)throw new Error(label+' timed out');await pause(25);}};
+  const test=async(name,body)=>{
+    try{await body();privacyResults.push({name,pass:true});}
+    catch(error){privacyResults.push({name,pass:false,error:error.message});}
+    const result=privacyResults[privacyResults.length-1],li=document.createElement('li');
+    li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const detail=document.createElement('code');detail.textContent=result.error;li.append(detail);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=privacyResults.filter(result=>result.pass).length+' / '+privacyResults.length+' passed';
+  };
+  function syntheticDocx(){
+    const encoder=new TextEncoder(),name=encoder.encode('word/document.xml');
+    const xml=encoder.encode('<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMathPara><m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath></m:oMathPara></w:p></w:body></w:document>');
+    let crc=0xffffffff;
+    for(const byte of xml){crc^=byte;for(let bit=0;bit<8;bit++)crc=crc&1?0xedb88320^(crc>>>1):crc>>>1;}
+    crc=(crc^0xffffffff)>>>0;
+    const local=new Uint8Array(30+name.length),lv=new DataView(local.buffer);
+    lv.setUint32(0,0x04034b50,true);lv.setUint16(4,20,true);lv.setUint32(14,crc,true);lv.setUint32(18,xml.length,true);lv.setUint32(22,xml.length,true);lv.setUint16(26,name.length,true);local.set(name,30);
+    const central=new Uint8Array(46+name.length),cv=new DataView(central.buffer);
+    cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint32(16,crc,true);cv.setUint32(20,xml.length,true);cv.setUint32(24,xml.length,true);cv.setUint16(28,name.length,true);central.set(name,46);
+    const end=new Uint8Array(22),ev=new DataView(end.buffer);
+    ev.setUint32(0,0x06054b50,true);ev.setUint16(8,1,true);ev.setUint16(10,1,true);ev.setUint32(12,central.length,true);ev.setUint32(16,local.length+xml.length,true);
+    return new win.File([local,xml,central,end],'synthetic-local-only.docx',{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+  }
+  await test('CSP blocks outbound connections, forms, frames and remote assets',()=>{
+    const policy=doc.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    assert(policy,'Missing Content Security Policy');
+    for(const expected of ["default-src 'none'","connect-src 'none'","form-action 'none'","frame-src 'none'","object-src 'none'","worker-src 'none'","base-uri 'none'","img-src data: blob:","font-src data:"]){assert(policy.content.includes(expected),'Missing '+expected);}
+    assert(doc.querySelector('meta[name="referrer"]').content==='no-referrer','External navigation may send a referrer');
+    assert(!doc.querySelector('script[src],link[rel="stylesheet"],iframe,form'),'Unexpected external dependency or submission surface');
+    for(const image of doc.querySelectorAll('img'))assert(/^(data:|blob:)/.test(image.src),'Image is not embedded');
+    assert(doc.querySelector('link[rel="icon"]').href.startsWith('data:image/svg+xml;'),'Favicon is not embedded');
+  });
+  await test('Synthetic DOCX imports and renders using local bytes only',async()=>{
+    const transfer=new win.DataTransfer();transfer.items.add(syntheticDocx());
+    $('fileInput').files=transfer.files;$('fileInput').dispatchEvent(new win.Event('change',{bubbles:true}));
+    await waitFor(()=>!$('convertButton').disabled,'Local DOCX parsing');
+    assert($('outputCode').value.replace(/\s/g,'')==='\\frac{a}{b}','DOCX equation was not extracted: '+$('status').textContent);
+    assert($('preview').querySelector('.katex'),'No local preview');
+    assert($('fileInput').files.length===0,'File picker was not cleared');
+    assert(violations.length===0,'Local conversion tried a forbidden resource');
+  });
+  await test('SVG and PNG export still work with the restrictive policy',async()=>{
+    const options={fontFamily:'bold',fontSizePt:18,color:'#146bce',padding:4,pixelRatio:2};
+    const vector=await win.WordImageExport.svg('\\frac{A}{B}',options);
+    const markup=await vector.blob.text();
+    const parsed=new DOMParser().parseFromString(markup,'image/svg+xml');
+    assert(parsed.querySelector('path[d]'),'SVG has no vector paths');
+    assert(!parsed.querySelector('image,text,foreignObject,script'),'SVG contains external or active content');
+    const png=await win.WordImageExport.png('\\frac{A}{B}',options);
+    const signature=Array.from(new Uint8Array(await png.blob.slice(0,8).arrayBuffer())).join(',');
+    assert(signature==='137,80,78,71,13,10,26,10','PNG signature is invalid');
+    assert(png.width>0&&png.height>0,'PNG dimensions are invalid');
+    assert(violations.length===0,'Image export tried a forbidden resource');
+  });
+  await test('Ordinary import, preview and export load no HTTP resources',()=>{
+    const resources=win.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));
+    assert(resources.length===0,'Unexpected HTTP resource: '+resources.map(entry=>entry.name).join(', '));
+  });
+  await test('Saving an offline copy strips imported data and retains the policy',async()=>{
+    let capturedBlob;
+    const create=win.URL.createObjectURL,click=win.HTMLAnchorElement.prototype.click;
+    win.URL.createObjectURL=function(blob){capturedBlob=blob;return create.call(win.URL,blob);};
+    win.HTMLAnchorElement.prototype.click=function(){};
+    try{$('downloadApp').click();}finally{win.URL.createObjectURL=create;win.HTMLAnchorElement.prototype.click=click;}
+    assert(capturedBlob,'No offline download generated');
+    const text=await capturedBlob.text();
+    assert(!text.includes('synthetic-local-only.docx'),'Imported filename remains in offline copy');
+    const saved=new DOMParser().parseFromString(text,'text/html');
+    assert(saved.getElementById('sourceInput').textContent===''&&saved.getElementById('outputCode').textContent==='','Imported formulas remain in offline copy');
+    assert(saved.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("connect-src 'none'"),'Offline copy lost network protection');
+  });
+  await test('Control fetch succeeds; protected document rejects the same URL',async()=>{
+    const policy=doc.querySelector('meta[http-equiv="Content-Security-Policy"]').content;
+    assert(/(?:^|;)\s*connect-src\s+'none'\s*(?:;|$)/.test(policy),'Protected document has no explicit connect-src prohibition');
+    const probeURL=new URL('../assets/logo-icon.svg',win.location.href).href;
+    const control=await fetch(probeURL,{cache:'no-store'});
+    assert(control.status===200,'Control fetch did not return HTTP 200');
+    assert((await control.text()).includes('<svg'),'Control did not retrieve the expected static SVG');
+    // Run the protected request in its own document. Browser extensions may
+    // wrap fetch and suppress CSP events, so successful control + rejected
+    // identical request + explicit connect-src are the required assertions.
+    const script=doc.createElement('script');
+    script.textContent='('+function(url){
+      const root=document.documentElement,owner=document.currentScript;
+      function onViolation(event){
+        if(event.blockedURI!==url)return;
+        root.setAttribute('data-privacy-csp-directive',event.effectiveDirective);
+      }
+      document.addEventListener('securitypolicyviolation',onViolation,true);
+      window.addEventListener('securitypolicyviolation',onViolation,true);
+      owner.privacyCleanup=function(){
+        document.removeEventListener('securitypolicyviolation',onViolation,true);
+        window.removeEventListener('securitypolicyviolation',onViolation,true);
+      };
+      fetch(url,{cache:'no-store'})
+        .then(()=>root.setAttribute('data-privacy-fetch-result','unexpected-success'))
+        .catch(error=>root.setAttribute('data-privacy-fetch-result',error.name));
+    }.toString()+')('+JSON.stringify(probeURL)+');';
+    try{
+      doc.body.append(script);
+      await waitFor(()=>doc.documentElement.hasAttribute('data-privacy-fetch-result'),'Protected fetch rejection');
+      assert(doc.documentElement.getAttribute('data-privacy-fetch-result')==='TypeError','Protected request was not rejected');
+      await pause(100);
+      const directive=doc.documentElement.getAttribute('data-privacy-csp-directive');
+      if(directive!==null)assert(directive==='connect-src','Unexpected CSP rejection directive: '+directive);
+    }finally{
+      if(script.privacyCleanup)script.privacyCleanup();
+      script.remove();
+      doc.documentElement.removeAttribute('data-privacy-fetch-result');
+      doc.documentElement.removeAttribute('data-privacy-csp-directive');
+    }
+  });
+  document.getElementById('summary').textContent=privacyResults.filter(result=>result.pass).length+' / '+privacyResults.length+' passed — complete';
+  globalThis.privacyComplete=true;
+});
+</script>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Word equation app integration tests</title>
+<style>body{font:14px system-ui;max-width:1200px;margin:24px auto;padding:0 20px;background:#f8faf7}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:700px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}</style>
+<h1>App integration tests</h1><p>Uses synthetic clipboard fixtures only. Does not read the system clipboard or user files.</p><p id="summary">Loading the built HTML…</p><ol id="results"></ol>
+<iframe id="app" title="Equation app under test" src="../dist/index.html"></iframe>
+<script>
+'use strict';
+globalThis.integrationResults = [];
+const frame = document.getElementById('app');
+frame.addEventListener('load', async () => {
+  const win = frame.contentWindow;
+  const doc = win.document;
+  const $ = id => doc.getElementById(id);
+  const math = body => '<math xmlns="http://www.w3.org/1998/Math/MathML">'+body+'</math>';
+  const fraction = math('<mfrac><mi>a</mi><mi>b</mi></mfrac>');
+  const compact = s => s.replace(/\s/g, '');
+  const assert = (value, message) => { if (!value) throw new Error(message); };
+  const output = () => $('outputCode').value;
+  const event = (id, type) => $(id).dispatchEvent(new win.Event(type, {bubbles:true}));
+  function paste({plain='', html='', mathml='', image=false}) {
+    const data = new win.DataTransfer();
+    if (plain) data.setData('text/plain', plain);
+    if (html) data.setData('text/html', html);
+    if (mathml) data.setData('application/mathml+xml', mathml);
+    if (image) data.items.add(new win.File([new Uint8Array([137,80,78,71])], 'fixture.png', {type:'image/png'}));
+    $('sourceInput').dispatchEvent(new win.ClipboardEvent('paste', {clipboardData:data, bubbles:true, cancelable:true}));
+  }
+  function reset() {
+    $('clearButton').click(); $('outputMode').value='raw'; event('outputMode','change');
+  }
+  async function test(name, body) {
+    reset();
+    try { await body(); integrationResults.push({name,pass:true}); }
+    catch(error) { integrationResults.push({name,pass:false,error:error.message}); }
+    const result=integrationResults.at(-1);
+    const li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const detail=document.createElement('code');detail.textContent=result.error;li.append(detail);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=integrationResults.filter(r=>r.pass).length+' / '+integrationResults.length+' passed';
+  }
+  try {
+    await test('Structured MathML HTML takes precedence over flattened plain text',()=>{
+      paste({html:'<html><body>'+fraction+'</body></html>',plain:'ab'});
+      assert(compact(output())==='\\frac{a}{b}', 'Expected a structured fraction; got '+output());
+      assert($('sourceInput').value==='ab', 'Readable clipboard text was not retained in input');
+      assert(!$('copyButton').disabled, 'Copy remains disabled after successful conversion');
+      assert($('preview').querySelector('math'), 'No MathML preview was rendered');
+    });
+    await test('Native exposed MathML type takes precedence over HTML and text',()=>{
+      paste({mathml:fraction,html:math('<mi>z</mi>'),plain:'wrong'});
+      assert(compact(output())==='\\frac{a}{b}', 'Did not prefer application/mathml+xml');
+    });
+    await test('Plain LaTeX paste is preserved',()=>{
+      paste({plain:'\\sqrt{x^2+y^2}'});
+      assert(compact(output())==='\\sqrt{x^2+y^2}', 'LaTeX changed: '+output());
+    });
+    await test('Image-only paste warns and clears the previous result',()=>{
+      paste({plain:'\\frac{a}{b}'}); paste({image:true});
+      assert(output()==='', 'Stale result remains after image paste');
+      assert($('copyButton').disabled && $('exportButton').disabled, 'Stale result is still exportable');
+      assert(/图片/.test($('status').textContent) && /docx/i.test($('status').textContent), 'No actionable image-format warning');
+    });
+    await test('Image-only paste cannot reconvert an older hidden clipboard source',()=>{
+      paste({html:fraction,plain:'ab'}); paste({image:true}); $('convertButton').click();
+      assert(output()==='', 'Previous formula returned after clicking convert: '+output());
+    });
+    await test('Manual source edits invalidate stale output and cached MathML',()=>{
+      paste({html:fraction,plain:'ab'}); $('sourceInput').value='x^2'; event('sourceInput','input');
+      assert(output()==='', 'Stale result remains after source edit');
+      assert($('copyButton').disabled, 'Copy enabled for invalidated result');
+      $('convertButton').click(); assert(compact(output())==='x^2' || compact(output())==='x^{2}', 'Cached clipboard structure took precedence over new text: '+output());
+    });
+    await test('Mac Command+Enter converts manual input',()=>{
+      $('sourceInput').value='\\sqrt{x}'; event('sourceInput','input');
+      $('sourceInput').dispatchEvent(new win.KeyboardEvent('keydown',{key:'Enter',metaKey:true,bubbles:true,cancelable:true}));
+      assert(compact(output())==='\\sqrt{x}', 'Command+Enter did not convert');
+    });
+    await test('Clear resets input, output, warnings, preview and equation list',()=>{
+      paste({html:math('<mi>x</mi>')+math('<mi>y</mi>')}); $('clearButton').click();
+      assert($('sourceInput').value==='' && output()==='', 'Input or output not cleared');
+      assert($('equationList').hidden && !$('equationItems').children.length, 'Equation list remains');
+      assert($('warnings').hidden && !$('warnings').children.length, 'Warnings remain');
+      assert(!$('preview').querySelector('math'), 'Previous preview remains');
+      assert($('copyButton').disabled && $('exportButton').disabled, 'Actions remain enabled');
+    });
+    await test('Manual output edits survive all output-wrapper toggles',()=>{
+      paste({plain:'x'}); $('outputCode').value='\\frac{u+v}{w}'; event('outputCode','input');
+      for(const [mode,start,end] of [['display','\\[','\\]'],['inline','\\(','\\)'],['dollars','$$','$$'],['raw','','']]){
+        $('outputMode').value=mode;event('outputMode','change');
+        assert(compact(output())===start+'\\frac{u+v}{w}'+end, mode+' lost edited code: '+output());
+      }
+    });
+    await test('Multiple formulas can switch without losing edited output',()=>{
+      paste({html:math('<mi>x</mi>')+math('<mi>y</mi>')});
+      assert($('equationItems').children.length===2, 'Expected two formula selectors');
+      $('outputCode').value='z+1';event('outputCode','input');
+      $('equationItems').children[1].click();assert(output()==='y','Second formula not selected');
+      $('equationItems').children[0].click();assert(output()==='z+1','Edited first formula was lost');
+    });
+    await test('Offline HTML download removes all pasted and converted user data',async()=>{
+      const secret='PRIVATE_FIXTURE_9237_ABC';paste({plain:'\\text{'+secret+'}'});
+      let capturedBlob=null,filename='';
+      const originalCreate=win.URL.createObjectURL;
+      const originalClick=win.HTMLAnchorElement.prototype.click;
+      win.URL.createObjectURL=function(blob){capturedBlob=blob;return originalCreate.call(win.URL,blob);};
+      win.HTMLAnchorElement.prototype.click=function(){filename=this.download;};
+      try{$('downloadApp').click();}
+      finally{win.URL.createObjectURL=originalCreate;win.HTMLAnchorElement.prototype.click=originalClick;}
+      assert(capturedBlob,'No downloadable HTML blob produced');
+      assert(/\.html$/.test(filename),'Wrong download filename: '+filename);
+      const saved=await capturedBlob.text();
+      assert(!saved.includes(secret),'Saved tool contains user formula data');
+      const parsed=new win.DOMParser().parseFromString(saved,'text/html');
+      assert(parsed.getElementById('sourceInput').textContent==='' && parsed.getElementById('outputCode').textContent==='', 'Saved textareas are not empty');
+      assert(parsed.querySelectorAll('script').length>=3,'Offline app scripts were removed');
+      assert(!parsed.querySelector('script[src]'),'Saved offline app has external scripts');
+    });
+  } catch(error) {
+    const li=document.createElement('li');li.className='fail';li.textContent='HARNESS ERROR: '+error.message;document.getElementById('results').append(li);
+    integrationResults.push({name:'Harness',pass:false,error:error.message});
+  }
+  document.getElementById('summary').textContent=integrationResults.filter(r=>r.pass).length+' / '+integrationResults.length+' passed — complete';
+  globalThis.integrationComplete=true;
+});
+</script>

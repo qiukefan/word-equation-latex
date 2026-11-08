@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline equation export tests</title>
+<style>
+body{font:14px system-ui;max-width:1280px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:850px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}.saved-app{position:absolute;left:-20000px;top:0;width:800px;height:700px}
+</style>
+<h1>Offline formula export tests</h1>
+<p>Uses generated formulas only. Captures downloads in memory; no user documents, system clipboard, or real downloads are accessed.</p>
+<p id="summary">Loading the built HTML…</p><ol id="results"></ol>
+<iframe id="app" title="Equation export app under test" src="../dist/index.html"></iframe>
+<script>
+'use strict';
+globalThis.exportResults=[];
+globalThis.exportComplete=false;
+const frame=document.getElementById('app');
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document;
+  const $=id=>doc.getElementById(id);
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const timeout=(promise,ms,label)=>new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error(label+' timed out')),ms);
+    Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+  });
+  const waitFor=async(condition,label,ms=12000)=>{
+    const start=performance.now();
+    while(!condition()){if(performance.now()-start>ms)throw new Error(label+' timed out');await pause(25);}
+  };
+  const change=id=>$(id).dispatchEvent(new win.Event('change',{bubbles:true}));
+  const setFormula=latex=>{
+    $('outputCode').value=latex;
+    $('outputCode').dispatchEvent(new win.Event('input',{bubbles:true}));
+  };
+  const setMode=mode=>{$('outputMode').value=mode;change('outputMode');};
+  const math=body=>'<math xmlns="http://www.w3.org/1998/Math/MathML">'+body+'</math>';
+  function pasteMathml(source){
+    const clipboard=new win.DataTransfer();clipboard.setData('application/mathml+xml',source);
+    $('sourceInput').dispatchEvent(new win.ClipboardEvent('paste',{clipboardData:clipboard,bubbles:true,cancelable:true}));
+  }
+  function captureDownloads(){
+    const originalCreate=win.URL.createObjectURL,originalClick=win.HTMLAnchorElement.prototype.click;
+    const blobs=new Map(),downloads=[];
+    win.URL.createObjectURL=function(blob){const url=originalCreate.call(win.URL,blob);blobs.set(url,blob);return url;};
+    win.HTMLAnchorElement.prototype.click=function(){if(this.download)downloads.push({name:this.download,blob:blobs.get(this.href)});};
+    return {downloads,stop(){win.URL.createObjectURL=originalCreate;win.HTMLAnchorElement.prototype.click=originalClick;}};
+  }
+  async function captureDownload(action,suffix){
+    const capture=captureDownloads();
+    try{
+      action();await waitFor(()=>capture.downloads.some(item=>item.name.endsWith(suffix)),'Download '+suffix);
+      const item=capture.downloads.find(item=>item.name.endsWith(suffix));assert(item.blob,'Download has no matching Blob');return item;
+    }finally{capture.stop();}
+  }
+  async function reset(){
+    if(doc.querySelector('.preview-card.is-expanded'))$('previewExpand').click();
+    $('clearButton').click();setMode('raw');$('previewZoomReset').click();
+    if($('imageBackground')){$('imageBackground').value='transparent';change('imageBackground');}
+    if($('pngScale')){$('pngScale').value='3';change('pngScale');}
+    await pause(0);
+  }
+  async function raster(blob){
+    const url=URL.createObjectURL(blob),image=new Image();
+    try{
+      await timeout(new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('Image could not be decoded independently'));image.src=url;}),6000,'Image decode');
+      const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+      assert(canvas.width>0&&canvas.height>0,'Decoded image has zero dimensions');
+      const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
+      const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+      let ink=0,minX=canvas.width,minY=canvas.height,maxX=-1,maxY=-1;
+      for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
+        const i=(y*canvas.width+x)*4;
+        if(pixels[i+3]>40&&pixels[i]<180&&pixels[i+1]<180&&pixels[i+2]<180){ink++;minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}
+      }
+      return {width:canvas.width,height:canvas.height,pixels,ink,minX,minY,maxX,maxY};
+    }finally{URL.revokeObjectURL(url);}
+  }
+  function inspectSvg(text){
+    const parsed=new DOMParser().parseFromString(text,'image/svg+xml');
+    assert(!parsed.querySelector('parsererror'),'SVG is invalid XML');
+    const svg=parsed.documentElement;assert(svg.localName==='svg','Export is not an SVG document');
+    assert(!svg.querySelector('foreignObject,script,image,text'),'SVG depends on HTML, scripts, raster images, or installed text fonts');
+    assert(svg.querySelector('path[d]'),'SVG contains no vector glyph paths');
+    const box=(svg.getAttribute('viewBox')||'').trim().split(/[\s,]+/).map(Number);
+    assert(box.length===4&&box.every(Number.isFinite)&&box[2]>0&&box[3]>0,'SVG has an invalid viewBox');
+    for(const node of [svg,...svg.querySelectorAll('*')])for(const attribute of node.attributes){
+      if(/^(?:href|src)$/.test(attribute.localName))assert(attribute.value.startsWith('#'),'SVG has an external reference: '+attribute.value);
+      for(const match of attribute.value.matchAll(/url\(([^)]+)\)/g))assert(match[1].replace(/["']/g,'').trim().startsWith('#'),'SVG has an external resource URL');
+    }
+    return svg;
+  }
+  const glyphs=svg=>[...svg.querySelectorAll('path[d]')].map(path=>path.getAttribute('d')).sort().join('|');
+  const fixture=String.raw`\sum_{k=0}^{n}\binom{n}{k}x^{n-k}y^k=(x+y)^n`;
+  async function test(name,body){
+    try{await reset();await timeout(body(),20000,name);exportResults.push({name,pass:true});}
+    catch(error){exportResults.push({name,pass:false,error:error.message});}
+    const result=exportResults.at(-1),li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const code=document.createElement('code');code.textContent=result.error;li.append(code);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=exportResults.filter(result=>result.pass).length+' / '+exportResults.length+' passed';
+  }
+  try{
+    await test('TEX exports all equations using the selected raw, display, inline, or dollar wrapper',async()=>{
+      pasteMathml(math('<mfrac><mi>a</mi><mi>b</mi></mfrac>')+math('<msup><mi>x</mi><mn>2</mn></msup>'));
+      assert($('equationItems').children.length===2,'Fixture did not create two equations');
+      const expected={raw:'\\frac{a}{b}\n\nx^{2}',display:'\\[\n\\frac{a}{b}\n\\]\n\n\\[\nx^{2}\n\\]',inline:'\\(\\frac{a}{b}\\)\n\n\\(x^{2}\\)',dollars:'$$\n\\frac{a}{b}\n$$\n\n$$\nx^{2}\n$$'};
+      for(const mode of ['raw','display','inline','dollars']){
+        setMode(mode);const download=await captureDownload(()=>$('exportButton').click(),'.tex');
+        const content=(await download.blob.text()).split('\n').filter(line=>!line.startsWith('%')).join('\n').trim();
+        assert(content===expected[mode],mode+' export does not match the selected wrapper: '+content);
+      }
+    });
+    await test('Markdown exports every formula in dollar blocks regardless of the copy/TEX format',async()=>{
+      assert($('exportMdButton').disabled,'Empty document can export Markdown');
+      pasteMathml(math('<mfrac><mi>a</mi><mi>b</mi></mfrac>')+math('<msup><mi>x</mi><mn>2</mn></msup>'));
+      const expected=['\\frac{a}{b}','x^{2}'];
+      for(const mode of ['raw','display','inline','dollars']){
+        setMode(mode);const download=await captureDownload(()=>$('exportMdButton').click(),'.md');
+        assert(download.blob.type.startsWith('text/markdown'),'Markdown has the wrong MIME type');
+        const content=await download.blob.text();
+        const blocks=[...content.matchAll(/\$\$\s*([\s\S]*?)\s*\$\$/g)].map(match=>match[1].trim());
+        assert(JSON.stringify(blocks)===JSON.stringify(expected),mode+' Markdown export does not include both formulas as separate $$ blocks: '+content);
+        assert(!content.includes('\\[')&&!content.includes('\\('),mode+' leaked the selected TEX delimiters into Markdown');
+      }
+      $('clearButton').click();assert($('exportMdButton').disabled,'Markdown export remains enabled after clearing formulas');
+    });
+    await test('SVG export is a standalone vector image and reopens outside the app',async()=>{
+      const result=await win.WordImageExport.svg(fixture,{background:'transparent',fontSize:28,padding:16});
+      assert(result.blob.type.startsWith('image/svg+xml'),'SVG has the wrong MIME type');
+      const text=await result.blob.text(),svg=inspectSvg(text);
+      assert(Number(svg.getAttribute('width'))===result.width&&Number(svg.getAttribute('height'))===result.height,'SVG dimensions do not match export metadata');
+      const standalone=new Blob([text],{type:'image/svg+xml'}),rendered=await raster(standalone);
+      assert(rendered.ink>100,'Standalone SVG appears blank');
+      assert(rendered.minX>0&&rendered.minY>0&&rendered.maxX<rendered.width-1&&rendered.maxY<rendered.height-1,'SVG glyphs are clipped against the image edge');
+    });
+    await test('Transparent PNG contains crisp formula pixels and 3x output dimensions',async()=>{
+      const options={background:'transparent',fontSize:28,padding:16,pixelRatio:3};
+      const vector=await win.WordImageExport.svg(fixture,options),result=await win.WordImageExport.png(fixture,options);
+      assert(result.blob.type==='image/png','PNG has the wrong MIME type');
+      const signature=new Uint8Array(await result.blob.slice(0,8).arrayBuffer());
+      assert([...signature].join(',')==='137,80,78,71,13,10,26,10','PNG signature is invalid');
+      const rendered=await raster(result.blob);
+      assert(rendered.width===result.width&&rendered.height===result.height,'PNG metadata is incorrect');
+      assert(rendered.width===Math.ceil(vector.width*3)&&rendered.height===Math.ceil(vector.height*3),'PNG scale is not 3x the SVG size');
+      assert(rendered.pixels[3]===0,'Transparent PNG has an opaque corner');
+      assert(rendered.ink>300,'PNG formula is blank or nearly empty');
+      assert(rendered.minX>=8&&rendered.minY>=8&&rendered.maxX<=rendered.width-9&&rendered.maxY<=rendered.height-9,'PNG loses its protective padding');
+    });
+    await test('White background export produces opaque white PNG and SVG corners',async()=>{
+      const equation=String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`;
+      const options={background:'white',fontSize:28,padding:16,pixelRatio:2};
+      for(const method of ['svg','png']){
+        const result=await win.WordImageExport[method](equation,options),rendered=await raster(result.blob);
+        assert([...rendered.pixels.slice(0,4)].join(',')==='255,255,255,255',method+' corner is not opaque white');
+        assert(rendered.ink>50,method+' has no visible matrix');
+      }
+    });
+    await test('SVG and PNG buttons export the current formula with the requested settings',async()=>{
+      setFormula(String.raw`\sum_{k=0}^{n}\binom{n}{k}x^{n-k}y^k=(x+y)^n`);
+      const source=$('outputCode').value;
+      const svgDownload=await captureDownload(()=>$('exportSvgButton').click(),'.svg');inspectSvg(await svgDownload.blob.text());
+      $('imageBackground').value='white';change('imageBackground');$('pngScale').value='2';change('pngScale');
+      const pngDownload=await captureDownload(()=>$('exportPngButton').click(),'.png');
+      const rendered=await raster(pngDownload.blob);assert(rendered.ink>50,'UI PNG is blank');
+      assert([...rendered.pixels.slice(0,4)].join(',')==='255,255,255,255','UI ignored the selected white background');
+      assert($('outputCode').value===source,'Export changed the source formula');
+    });
+    await test('An asynchronous image download preserves the clicked formula snapshot',async()=>{
+      const original=String.raw`x+1`,replacement=String.raw`\sum_{i=1}^{n}\frac{1}{i}`;
+      const expected=inspectSvg(await (await win.WordImageExport.svg(original,{background:'transparent',fontSize:28,padding:16})).blob.text());
+      setFormula(original);
+      const saved=await captureDownload(()=>{$('exportSvgButton').click();setFormula(replacement);},'.svg');
+      const actual=inspectSvg(await saved.blob.text());
+      assert(glyphs(actual)===glyphs(expected),'The exported formula changed after editing while export was pending');
+      assert($('outputCode').value===replacement,'Finishing export restored stale source text');
+    });
+    await test('Malformed formulas reject cleanly without downloading a broken image',async()=>{
+      const bad=String.raw`\frac{a}{`;
+      for(const method of ['svg','png']){
+        let rejected=false;try{await win.WordImageExport[method](bad,{background:'transparent'});}catch(error){rejected=Boolean(error.message);}
+        assert(rejected,method+' silently accepted malformed LaTeX');
+      }
+      setFormula(bad);const capture=captureDownloads();
+      try{$('exportSvgButton').click();$('exportPngButton').click();await pause(100);assert(capture.downloads.length===0,'Invalid formula downloaded a file');}
+      finally{capture.stop();}
+      assert($('preview').querySelector('.preview-error'),'Malformed preview is not identified');
+    });
+    await test('Export assets are embedded and no network resource is used for rendering',async()=>{
+      await win.WordImageExport.png(fixture,{background:'transparent',pixelRatio:2});
+      assert(!doc.querySelector('script[src],link[rel="stylesheet"]'),'The app needs external scripts or stylesheets');
+      const requests=win.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));
+      assert(requests.length===0,'Runtime requested a network resource: '+requests.map(entry=>entry.name).join(', '));
+    });
+    await test('Saved offline HTML reopens with working SVG and PNG export',async()=>{
+      setFormula(String.raw`\frac{PRIVATEFIXTURE+1}{2}`);
+      $('pngScale').value='4';change('pngScale');
+      const saved=await captureDownload(()=>$('downloadApp').click(),'.html'),html=await saved.blob.text();
+      assert(!html.includes('PRIVATEFIXTURE'),'Saved application includes the user formula');
+      const savedDoc=new DOMParser().parseFromString(html,'text/html');
+      assert(savedDoc.getElementById('exportMdButton').disabled,'Saved HTML leaves Markdown export enabled with no formula');
+      assert(savedDoc.getElementById('pngScale').value==='3','Saved HTML does not restore the 3x PNG default');
+      const restored=document.createElement('iframe');restored.className='saved-app';restored.title='Saved standalone export app';
+      try{
+        const loaded=new Promise(resolve=>restored.onload=resolve);restored.srcdoc=html;document.body.append(restored);await timeout(loaded,12000,'Saved HTML load');
+        const again=restored.contentWindow;assert(again.WordImageExport,'Saved HTML lost its image exporter');
+        assert(again.document.getElementById('exportMdButton').disabled,'Reopened empty app can export Markdown');
+        assert(again.document.getElementById('pngScale').value==='3','Reopened app lost its 3x PNG default');
+        const svg=await again.WordImageExport.svg(String.raw`\sqrt{x^2+1}`,{background:'transparent',fontSize:28,padding:16});inspectSvg(await svg.blob.text());
+        const png=await again.WordImageExport.png(String.raw`\sqrt{x^2+1}`,{background:'transparent',pixelRatio:2});assert((await raster(png.blob)).ink>50,'Reopened offline app exports a blank PNG');
+        const requests=again.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));assert(requests.length===0,'Reopened offline HTML fetched a remote dependency');
+      }finally{restored.remove();}
+    });
+  }catch(error){exportResults.push({name:'Harness',pass:false,error:error.message});const li=document.createElement('li');li.className='fail';li.textContent='HARNESS ERROR: '+error.message;document.getElementById('results').append(li);}
+  document.getElementById('summary').textContent=exportResults.filter(result=>result.pass).length+' / '+exportResults.length+' passed — complete';
+  globalThis.exportComplete=true;
+  await reset();setFormula(fixture);
+});
+</script>
+</html>

@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline equation font selection tests</title>
+<style>
+body{font:14px system-ui;max-width:1280px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:1050px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}.saved-app{position:absolute;left:-20000px;top:0;width:800px;height:700px}
+</style>
+<h1>Offline equation font selection tests</h1>
+<p>Uses synthetic formulas only. Captures downloads in memory; no user documents, system clipboard, or real downloads are accessed.</p>
+<p id="summary">Loading the built HTML…</p><ol id="results"></ol>
+<iframe id="app" title="Equation font selection app under test" src="../dist/index.html"></iframe>
+<script>
+'use strict';
+globalThis.fontResults=[];
+globalThis.fontComplete=false;
+const frame=document.getElementById('app');
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document;
+  const $=id=>doc.getElementById(id);
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const timeout=(promise,ms,label)=>new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error(label+' timed out')),ms);
+    Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+  });
+  const waitFor=async(condition,label,ms=12000)=>{
+    const start=performance.now();
+    while(!condition()){if(performance.now()-start>ms)throw new Error(label+' timed out');await pause(20);}
+  };
+  const nextFrame=()=>new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));
+  const input=(id,value)=>{
+    $(id).value=String(value);
+    $(id).dispatchEvent(new win.Event('input',{bubbles:true}));
+    $(id).dispatchEvent(new win.Event('change',{bubbles:true}));
+  };
+  const setFormula=async latex=>{
+    $('outputCode').value=latex;$('outputCode').dispatchEvent(new win.Event('input',{bubbles:true}));
+    await doc.fonts.ready;await nextFrame();
+  };
+  const selectFont=async id=>{input('formulaFontFamily',id);await doc.fonts.ready;await nextFrame();};
+  const fontIds=['default','roman','bold','italic','bolditalic','caligraphic','script','fraktur','double-struck','sans','typewriter'];
+  async function reset(){
+    if(doc.querySelector('.preview-card.is-expanded'))$('previewExpand').click();
+    await waitFor(()=>!$('pngScale').disabled,'Previous export finishing');
+    $('clearButton').click();input('outputMode','raw');$('previewZoomReset').click();
+    input('imageBackground','transparent');input('pngScale','3');
+    input('formulaFontSize',12);input('formulaColor','#000000');await selectFont('default');
+  }
+  function captureDownloads(){
+    const originalCreate=win.URL.createObjectURL,originalClick=win.HTMLAnchorElement.prototype.click;
+    const blobs=new Map(),downloads=[];
+    win.URL.createObjectURL=function(blob){const url=originalCreate.call(win.URL,blob);blobs.set(url,blob);return url;};
+    win.HTMLAnchorElement.prototype.click=function(){if(this.download)downloads.push({name:this.download,blob:blobs.get(this.href)});};
+    return{downloads,stop(){win.URL.createObjectURL=originalCreate;win.HTMLAnchorElement.prototype.click=originalClick;}};
+  }
+  async function captureDownload(action,suffix){
+    const capture=captureDownloads();
+    try{
+      action();await waitFor(()=>capture.downloads.some(item=>item.name.endsWith(suffix)),'Download '+suffix);
+      const item=capture.downloads.find(item=>item.name.endsWith(suffix));assert(item.blob,'Downloaded file has no Blob');return item;
+    }finally{capture.stop();}
+  }
+  function svgDocument(text){
+    const parsed=new DOMParser().parseFromString(text,'image/svg+xml');
+    assert(!parsed.querySelector('parsererror'),'SVG is not valid XML');
+    const root=parsed.documentElement;
+    assert(root.localName==='svg'&&root.querySelector('path[d]'),'SVG has no vector glyphs');
+    assert(!root.querySelector('foreignObject,script,text,image,use'),'SVG depends on HTML, scripts, fonts, or external glyphs');
+    for(const node of [root,...root.querySelectorAll('*')])for(const attribute of node.attributes){
+      if(/^(?:href|src)$/.test(attribute.localName))assert(attribute.value.startsWith('#'),'SVG has an external reference');
+      assert(!/url\s*\(/i.test(attribute.value),'SVG contains a resource URL');
+    }
+    return root;
+  }
+  const glyphs=svg=>[...svg.querySelectorAll('path[d]')].map(path=>path.getAttribute('d')).join('|');
+  function previewLetters(targetDoc=doc){
+    const targetWindow=targetDoc.defaultView,visual=targetDoc.querySelector('#preview .katex-html');
+    assert(visual,'No rendered preview');
+    return [...visual.querySelectorAll('*')].filter(node=>!node.children.length&&/[A-Za-z0-9α]/.test(node.textContent)).map(node=>{
+      const style=targetWindow.getComputedStyle(node);
+      return [node.textContent,style.fontFamily,style.fontStyle,style.fontWeight].join(':');
+    }).join('|');
+  }
+  async function raster(blob,dimensions){
+    const url=URL.createObjectURL(blob),image=new Image();
+    try{
+      await timeout(new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('Exported image failed to decode'));image.src=url;}),6000,'Image decode');
+      const canvas=document.createElement('canvas');canvas.width=dimensions?.width||image.naturalWidth;canvas.height=dimensions?.height||image.naturalHeight;
+      const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0,canvas.width,canvas.height);
+      const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+      const opaque=[];let fingerprint=2166136261;
+      for(let i=0;i<pixels.length;i+=4){
+        if(pixels[i+3]>245)opaque.push([pixels[i],pixels[i+1],pixels[i+2]]);
+        fingerprint=Math.imul(fingerprint^pixels[i+3],16777619);
+      }
+      return{width:canvas.width,height:canvas.height,pixels,opaque,fingerprint:fingerprint>>>0};
+    }finally{URL.revokeObjectURL(url);}
+  }
+  function assertColor(result,rgb,label){
+    assert(result.opaque.length>15,label+' has too few opaque glyph pixels');
+    const matching=result.opaque.filter(pixel=>pixel.every((value,index)=>Math.abs(value-rgb[index])<=2)).length;
+    assert(matching/result.opaque.length>0.97,label+' lost the chosen foreground color');
+  }
+  const fixture='ABC_{ij}+\\frac{A+B}{C}';
+  async function test(name,body,skipReset=false){
+    try{if(!skipReset)await reset();await timeout(body(),30000,name);fontResults.push({name,pass:true});}
+    catch(error){fontResults.push({name,pass:false,error:error.message});}
+    const result=fontResults.at(-1),li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const code=document.createElement('code');code.textContent=result.error;li.append(code);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=fontResults.filter(result=>result.pass).length+' / '+fontResults.length+' passed';
+  }
+  try{
+    await test('The dropdown exposes distinct bundled font styles and updates rendered letters',async()=>{
+      assert($('formulaFontFamily')?.value==='default','A fresh app does not start with the default math font');
+      const actual=[...$('formulaFontFamily').options].map(option=>option.value);
+      assert(actual.length===fontIds.length&&fontIds.every(id=>actual.includes(id)),'The font dropdown is missing styles or contains duplicates: '+actual.join(','));
+      await setFormula('ABC');const original=$('outputCode').value,signatures={};
+      for(const id of fontIds){
+        await selectFont(id);assert(!$('preview').querySelector('.preview-error'),id+' cannot preview ABC');
+        signatures[id]=previewLetters();assert(signatures[id],id+' has no rendered letters');
+        assert($('formulaFontHint').textContent.trim(),id+' has no description of its supported use');
+        assert($('outputCode').value===original,'Switching '+id+' rewrote the source');
+      }
+      for(const id of fontIds.filter(id=>id!=='default'))assert(signatures[id]!==signatures.default,id+' did not change the visible font');
+      assert(signatures.caligraphic!==signatures.script,'Calligraphic and script previews use the same glyph font');
+    },true);
+    await test('Every font reaches standalone SVG paths, including distinct calligraphic and script glyphs',async()=>{
+      const signatures={};
+      for(const id of fontIds){
+        const image=await win.WordImageExport.svg('ABC',{fontFamily:id,fontSizePt:18,color:'#000000'});
+        const svg=svgDocument(await image.blob.text());signatures[id]=glyphs(svg);
+        assert(/pt$/.test(svg.getAttribute('width'))&&/pt$/.test(svg.getAttribute('height')),id+' lost physical point dimensions');
+      }
+      for(const id of fontIds.filter(id=>id!=='default'))assert(signatures[id]!==signatures.default,id+' exported the default font paths');
+      assert(signatures.caligraphic!==signatures.script,'Calligraphic and script were collapsed to the same exported glyphs');
+    });
+    await test('Complex notation, comments, and explicit font commands survive every selected style',async()=>{
+      const complex="\\hat{x}_{12}+\\frac{\\mathrm{ABC}}{\\sqrt{1+y^2}}+\\mathbb{N}+\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix} % generic comment\n+\\mathbf{XYZ}";
+      for(const id of fontIds){
+        await selectFont(id);await setFormula(complex);
+        assert($('preview').querySelector('.katex-html')&&!$('preview').querySelector('.preview-error'),id+' broke structured notation or a trailing comment');
+        svgDocument(await (await win.WordImageExport.svg(complex,{fontFamily:id})).blob.text());
+        assert($('outputCode').value===complex,id+' altered structured source code');
+      }
+      await selectFont('default');await setFormula('\\mathrm{ABC}');
+      const basePreview=previewLetters(),baseSvg=glyphs(svgDocument(await (await win.WordImageExport.svg('\\mathrm{ABC}')).blob.text()));
+      for(const id of ['bold','script','sans']){
+        await selectFont(id);assert(previewLetters()===basePreview,id+' overrode an explicit roman font command');
+        const styled=await win.WordImageExport.svg('\\mathrm{ABC}',{fontFamily:id});
+        assert(glyphs(svgDocument(await styled.blob.text()))===baseSvg,id+' overrode explicit roman glyphs during export');
+      }
+      const legacy='{\\cal A}+\\mathscr{B}+\\Bbb{Cxyz}+{\\it D}';
+      const modern='\\mathcal{A}+\\mathscr{B}+\\mathbb{Cxyz}+\\mathit{D}';
+      await selectFont('script');await setFormula(legacy);
+      assert($('preview').querySelector('.katex-html')&&!$('preview').querySelector('.preview-error'),'Legacy font declarations failed under a selected script font');
+      assert($('outputCode').value===legacy,'Legacy font declarations were rewritten in the editor');
+      const legacySvg=await win.WordImageExport.svg(legacy,{fontFamily:'script'});
+      const modernSvg=await win.WordImageExport.svg(modern,{fontFamily:'default'});
+      assert(glyphs(svgDocument(await legacySvg.blob.text()))===glyphs(svgDocument(await modernSvg.blob.text())),'Legacy declarations or Bbb alias lost their explicit font or fallback glyphs during export');
+    });
+    await test('Decorative fonts preserve unsupported lowercase, numeric, and Greek math glyphs',async()=>{
+      const fallback='xyz123+\\alpha';
+      await setFormula(fallback);const normalPreview=previewLetters();
+      const normalSvg=glyphs(svgDocument(await (await win.WordImageExport.svg(fallback)).blob.text()));
+      for(const id of ['caligraphic','script','double-struck']){
+        await selectFont(id);assert(previewLetters()===normalPreview,id+' changed unsupported preview letters');
+        const result=await win.WordImageExport.svg(fallback,{fontFamily:id});
+        assert(glyphs(svgDocument(await result.blob.text()))===normalSvg,id+' exported unsupported letters in a different fallback font');
+      }
+    });
+    await test('PNG uses the selected glyphs while retaining color, point size, and transparency',async()=>{
+      const images={};
+      for(const id of ['default','sans','script']){
+        const options={fontFamily:id,fontSizePt:18,color:'#146bce',pixelRatio:3,padding:16};
+        const vector=await win.WordImageExport.svg('ABC',options),result=await win.WordImageExport.png('ABC',options);
+        const decoded=await raster(result.blob,result);assertColor(decoded,[20,107,206],id+' PNG');
+        assert(decoded.width===vector.width*3&&decoded.height===vector.height*3,id+' PNG does not honor 3x quality');
+        assert(decoded.pixels[3]===0,id+' PNG lost transparent padding');
+        images[id]=[decoded.width,decoded.height,decoded.fingerprint].join(':');
+      }
+      assert(images.sans!==images.default&&images.script!==images.default,'Selected fonts do not change the PNG pixels');
+    });
+    await test('Changing fonts preserves edited formulas, selection, TEX and Markdown, size, color, and zoom',async()=>{
+      const math=body=>'<math xmlns="http://www.w3.org/1998/Math/MathML">'+body+'</math>';
+      const clipboard=new win.DataTransfer();clipboard.setData('application/mathml+xml',math('<mi>A</mi>')+math('<mi>B</mi>'));
+      $('sourceInput').dispatchEvent(new win.ClipboardEvent('paste',{clipboardData:clipboard,bubbles:true,cancelable:true}));
+      assert($('equationItems').children.length===2,'Batch fixture did not create two formulas');
+      $('equationItems').children[1].click();await setFormula(fixture);
+      input('outputMode','dollars');input('formulaFontSize',24);input('formulaColor','#146bce');$('previewZoomIn').click();
+      const before={source:$('sourceInput').value,code:$('outputCode').value,position:$('equationPosition').textContent,zoom:$('previewZoomReset').textContent};
+      const texBefore=await (await captureDownload(()=>$('exportButton').click(),'.tex')).blob.text();
+      const mdBefore=await (await captureDownload(()=>$('exportMdButton').click(),'.md')).blob.text();
+      await selectFont('fraktur');
+      assert($('sourceInput').value===before.source&&$('outputCode').value===before.code,'Font selection changed user input or edited LaTeX');
+      assert($('equationPosition').textContent===before.position&&$('equationItems').children[1].getAttribute('aria-pressed')==='true','Font selection changed the current formula');
+      assert($('formulaFontSize').value==='24'&&$('formulaColor').value==='#146bce'&&$('previewZoomReset').textContent===before.zoom,'Font selection reset typography or zoom');
+      assert(await (await captureDownload(()=>$('exportButton').click(),'.tex')).blob.text()===texBefore,'Font selection changed TEX code');
+      assert(await (await captureDownload(()=>$('exportMdButton').click(),'.md')).blob.text()===mdBefore,'Font selection changed Markdown code');
+      $('equationItems').children[0].click();$('equationItems').children[1].click();
+      assert($('outputCode').value===before.code,'Switching formulas lost an edit after selecting a font');
+    });
+    await test('Image buttons capture the clicked font and restore controls after export',async()=>{
+      await setFormula('ABC');await selectFont('sans');input('formulaFontSize',18);input('formulaColor','#146bce');
+      const expected=await win.WordImageExport.svg('ABC',{fontFamily:'sans',fontSizePt:18,color:'#146bce',padding:16});
+      let disabledDuringExport=false;
+      const saved=await captureDownload(()=>{
+        $('exportSvgButton').click();disabledDuringExport=$('formulaFontFamily').disabled;
+        $('outputCode').value='XYZ';$('outputCode').dispatchEvent(new win.Event('input',{bubbles:true}));
+      },'.svg');
+      assert(disabledDuringExport,'The font selector is enabled while its image is being generated');
+      const actual=svgDocument(await saved.blob.text()),expectedSvg=svgDocument(await expected.blob.text());
+      assert(glyphs(actual)===glyphs(expectedSvg),'UI image export did not retain the clicked font and formula');
+      assert(actual.getAttribute('width')===expectedSvg.getAttribute('width'),'UI export ignored the selected font size');
+      await waitFor(()=>!$('formulaFontFamily').disabled,'Font selector recovering after SVG');
+      assert($('outputCode').value==='XYZ','Finishing a download restored stale source');
+      await setFormula('ABC');await selectFont('script');
+      const png=await captureDownload(()=>$('exportPngButton').click(),'.png');
+      const direct=await win.WordImageExport.png('ABC',{fontFamily:'script',fontSizePt:18,color:'#146bce',pixelRatio:3,padding:16});
+      const uiPixels=await raster(png.blob,direct),apiPixels=await raster(direct.blob,direct);
+      assert(uiPixels.fingerprint===apiPixels.fingerprint,'PNG button ignored the selected script font');
+      assertColor(uiPixels,[20,107,206],'UI PNG');await waitFor(()=>!$('formulaFontFamily').disabled,'Font selector recovering after PNG');
+    });
+    await test('Malformed input can recover after a font switch without leaking downloads',async()=>{
+      await selectFont('script');await setFormula('\\frac{A}{');
+      assert($('preview').querySelector('.preview-error'),'Invalid input has no readable error');
+      assert($('exportPngButton').disabled&&$('exportSvgButton').disabled,'Invalid styled input can still export');
+      await selectFont('roman');assert($('preview').querySelector('.preview-error'),'Changing fonts erased the error for invalid input');
+      await setFormula(fixture);
+      assert($('preview').querySelector('.katex-html')&&!$('exportSvgButton').disabled,'Valid formula did not recover under the selected font');
+      svgDocument(await (await win.WordImageExport.svg(fixture,{fontFamily:'roman'})).blob.text());
+    });
+    await test('Saved offline HTML resets font choice and reopens with every font embedded and working exports',async()=>{
+      await setFormula('\\sigma_{PRIVATEFONTFIXTURE}');await selectFont('script');input('formulaFontSize',24);input('formulaColor','#146bce');
+      const saved=await captureDownload(()=>$('downloadApp').click(),'.html'),html=await saved.blob.text();
+      assert(!html.includes('PRIVATEFONTFIXTURE'),'Saved HTML leaked the previous user formula');
+      const parsed=new DOMParser().parseFromString(html,'text/html');
+      assert(parsed.getElementById('formulaFontFamily').value==='default','Saved font choice did not reset to default');
+      assert(!parsed.getElementById('formulaFontFamily').disabled,'Saved font selector is disabled');
+      assert(!parsed.querySelector('script[src],link[rel="stylesheet"]'),'Saved HTML references an external script or stylesheet');
+      assert((html.match(/data:font\/woff2;base64,/g)||[]).length===20,'Saved HTML does not contain all 20 bundled fonts');
+      const restored=document.createElement('iframe');restored.className='saved-app';restored.title='Saved offline font selection app';
+      try{
+        const loaded=new Promise(resolve=>restored.onload=resolve);restored.srcdoc=html;document.body.append(restored);await timeout(loaded,12000,'Saved HTML load');
+        const again=restored.contentWindow,againDoc=again.document,selector=againDoc.getElementById('formulaFontFamily');
+        assert(selector.value==='default'&&selector.options.length===fontIds.length,'Reopened HTML lost its default or duplicated dropdown options');
+        const area=againDoc.getElementById('outputCode');area.value='ABC';area.dispatchEvent(new again.Event('input',{bubbles:true}));
+        await againDoc.fonts.ready;const defaultLetters=previewLetters(againDoc);
+        selector.value='fraktur';selector.dispatchEvent(new again.Event('change',{bubbles:true}));await againDoc.fonts.ready;
+        assert(previewLetters(againDoc)!==defaultLetters,'Saved HTML cannot change font');
+        const vector=await again.WordImageExport.svg('ABC',{fontFamily:'fraktur'});svgDocument(await vector.blob.text());
+        const png=await again.WordImageExport.png('ABC',{fontFamily:'fraktur',pixelRatio:2});assertColor(await raster(png.blob,png),[0,0,0],'Reopened PNG');
+        const requests=again.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));
+        assert(requests.length===0,'Reopened HTML requested network dependencies: '+requests.map(entry=>entry.name).join(', '));
+      }finally{restored.remove();}
+    });
+  }catch(error){fontResults.push({name:'Harness',pass:false,error:error.message});const li=document.createElement('li');li.className='fail';li.textContent='HARNESS ERROR: '+error.message;document.getElementById('results').append(li);}
+  document.getElementById('summary').textContent=fontResults.filter(result=>result.pass).length+' / '+fontResults.length+' passed — complete';
+  globalThis.fontComplete=true;
+  try{await reset();await setFormula(fixture);}catch{}
+});
+</script>
+</html>

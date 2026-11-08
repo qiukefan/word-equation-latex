@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Offline equation typography tests</title>
+<style>
+body{font:14px system-ui;max-width:1280px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}h1{font-size:25px}li{margin:12px 0;overflow-wrap:anywhere}.pass{color:#167238}.fail{color:#b42318}code{display:block;font:12px/1.6 monospace}iframe{width:100%;height:1050px;border:1px solid #d9e1d6;background:white}#summary{font-size:18px;font-weight:600}.saved-app{position:absolute;left:-20000px;top:0;width:800px;height:700px}
+</style>
+<h1>Offline equation typography tests</h1>
+<p>Uses synthetic formulas only. Captures generated downloads in memory; no user documents, system clipboard, or real downloads are accessed.</p>
+<p id="summary">Loading the built HTML…</p><ol id="results"></ol>
+<iframe id="app" title="Equation typography app under test" src="../dist/index.html"></iframe>
+<script>
+'use strict';
+globalThis.typographyResults=[];
+globalThis.typographyComplete=false;
+const frame=document.getElementById('app');
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document;
+  const $=id=>doc.getElementById(id);
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const timeout=(promise,ms,label)=>new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error(label+' timed out')),ms);
+    Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});
+  });
+  const waitFor=async(condition,label,ms=12000)=>{
+    const start=performance.now();
+    while(!condition()){if(performance.now()-start>ms)throw new Error(label+' timed out');await pause(20);}
+  };
+  const nextFrame=()=>new Promise(resolve=>win.requestAnimationFrame(()=>win.requestAnimationFrame(resolve)));
+  const input=(id,value)=>{
+    $(id).value=String(value);
+    $(id).dispatchEvent(new win.Event('input',{bubbles:true}));
+    $(id).dispatchEvent(new win.Event('change',{bubbles:true}));
+  };
+  const setFormula=async latex=>{
+    $('outputCode').value=latex;$('outputCode').dispatchEvent(new win.Event('input',{bubbles:true}));
+    await doc.fonts.ready;await nextFrame();
+  };
+  const setStyle=async(size,color)=>{input('formulaFontSize',size);input('formulaColor',color);await nextFrame();};
+  async function reset(){
+    if(doc.querySelector('.preview-card.is-expanded'))$('previewExpand').click();
+    await waitFor(()=>!$('pngScale').disabled,'Previous export finishing');
+    $('clearButton').click();$('outputMode').value='raw';$('outputMode').dispatchEvent(new win.Event('change',{bubbles:true}));
+    $('previewZoomReset').click();input('imageBackground','transparent');input('pngScale','3');
+    await setStyle(12,'#000000');await pause(0);
+  }
+  function captureDownloads(){
+    const originalCreate=win.URL.createObjectURL,originalClick=win.HTMLAnchorElement.prototype.click;
+    const blobs=new Map(),downloads=[];
+    win.URL.createObjectURL=function(blob){const url=originalCreate.call(win.URL,blob);blobs.set(url,blob);return url;};
+    win.HTMLAnchorElement.prototype.click=function(){if(this.download)downloads.push({name:this.download,blob:blobs.get(this.href)});};
+    return{downloads,stop(){win.URL.createObjectURL=originalCreate;win.HTMLAnchorElement.prototype.click=originalClick;}};
+  }
+  async function captureDownload(action,suffix){
+    const capture=captureDownloads();
+    try{action();await waitFor(()=>capture.downloads.some(item=>item.name.endsWith(suffix)),'Download '+suffix);
+      const item=capture.downloads.find(item=>item.name.endsWith(suffix));assert(item.blob,'Downloaded file has no Blob');return item;
+    }finally{capture.stop();}
+  }
+  function svgDocument(text){
+    const parsed=new DOMParser().parseFromString(text,'image/svg+xml');
+    assert(!parsed.querySelector('parsererror'),'SVG is not valid XML');
+    const root=parsed.documentElement;
+    assert(root.localName==='svg'&&root.querySelector('path[d]'),'SVG has no vector glyphs');
+    assert(!root.querySelector('foreignObject,script,text,image,use'),'SVG depends on HTML, scripts, fonts, or external glyphs');
+    return root;
+  }
+  const crc32=bytes=>{
+    let crc=0xffffffff;
+    for(const byte of bytes){crc^=byte;for(let bit=0;bit<8;bit++)crc=(crc>>>1)^((crc&1)?0xedb88320:0);}
+    return (crc^0xffffffff)>>>0;
+  };
+  async function pngMetadata(blob){
+    const bytes=new Uint8Array(await blob.arrayBuffer()),view=new DataView(bytes.buffer);
+    assert([...bytes.slice(0,8)].join(',')==='137,80,78,71,13,10,26,10','PNG signature is invalid');
+    const chunks=[];let offset=8;
+    while(offset+12<=bytes.length){
+      const length=view.getUint32(offset),end=offset+length+12;
+      assert(end<=bytes.length,'PNG chunk runs beyond the file');
+      const type=String.fromCharCode(...bytes.slice(offset+4,offset+8));
+      const expected=view.getUint32(offset+8+length),actual=crc32(bytes.slice(offset+4,offset+8+length));
+      assert(actual===expected,'Invalid CRC in PNG '+type+' chunk');
+      chunks.push({type,data:bytes.slice(offset+8,offset+8+length)});offset=end;
+      if(type==='IEND')break;
+    }
+    assert(offset===bytes.length,'PNG contains trailing or truncated data');
+    const ihdr=chunks.find(chunk=>chunk.type==='IHDR');assert(ihdr&&ihdr.data.length===13,'Missing PNG IHDR');
+    const size=new DataView(ihdr.data.buffer,ihdr.data.byteOffset,ihdr.data.byteLength);
+    const physical=chunks.filter(chunk=>chunk.type==='pHYs');
+    assert(physical.length===1&&physical[0].data.length===9,'PNG must contain exactly one valid pHYs chunk');
+    assert(chunks.findIndex(chunk=>chunk.type==='pHYs')<chunks.findIndex(chunk=>chunk.type==='IDAT'),'PNG density is stored after image data');
+    const density=new DataView(physical[0].data.buffer,physical[0].data.byteOffset,9);
+    return{width:size.getUint32(0),height:size.getUint32(4),x:density.getUint32(0),y:density.getUint32(4),unit:physical[0].data[8]};
+  }
+  async function raster(blob,exactSize){
+    const url=URL.createObjectURL(blob),image=new Image();
+    try{
+      await timeout(new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(new Error('Exported image failed to decode'));image.src=url;}),6000,'Image decode');
+      const canvas=document.createElement('canvas');canvas.width=exactSize?.width||image.naturalWidth;canvas.height=exactSize?.height||image.naturalHeight;
+      const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0,canvas.width,canvas.height);
+      const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+      let count=0,minX=canvas.width,minY=canvas.height,maxX=-1,maxY=-1;const opaque=[];
+      for(let y=0;y<canvas.height;y++)for(let x=0;x<canvas.width;x++){
+        const i=(y*canvas.width+x)*4;
+        if(pixels[i+3]>35){count++;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
+        if(pixels[i+3]>245)opaque.push([pixels[i],pixels[i+1],pixels[i+2]]);
+      }
+      return{width:canvas.width,height:canvas.height,count,pixels,opaque,inkWidth:maxX-minX+1,inkHeight:maxY-minY+1,minX,minY,maxX,maxY};
+    }finally{URL.revokeObjectURL(url);}
+  }
+  function assertInkColor(rendered,rgb,label){
+    assert(rendered.opaque.length>8,label+' has too few opaque formula pixels');
+    const matching=rendered.opaque.filter(pixel=>pixel.every((value,index)=>Math.abs(value-rgb[index])<=2)).length;
+    assert(matching/rendered.opaque.length>0.97,label+' has the wrong glyph color: '+JSON.stringify(rendered.opaque.slice(0,3)));
+  }
+  const fixture=String.raw`\sum_{k=0}^{n}\binom{n}{k}x^{n-k}y^k=(x+y)^n`;
+  async function test(name,body,skipReset=false){
+    try{if(!skipReset)await reset();await timeout(body(),20000,name);typographyResults.push({name,pass:true});}
+    catch(error){typographyResults.push({name,pass:false,error:error.message});}
+    const result=typographyResults.at(-1),li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name;
+    if(result.error){const code=document.createElement('code');code.textContent=result.error;li.append(code);}
+    document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=typographyResults.filter(result=>result.pass).length+' / '+typographyResults.length+' passed';
+  }
+  try{
+    await test('A fresh app defaults to 12pt black and previews at the correct CSS size',async()=>{
+      assert(Number($('formulaFontSize').value)===12,'Default point size is not 12pt');
+      assert($('formulaColor').value.toLowerCase()==='#000000','Default text color is not #000000');
+      assert($('formulaColorPicker').value==='#000000','Default color picker is not black');
+      await setFormula(fixture);
+      const visual=$('preview').querySelector('.katex');assert(visual,'Formula did not render');
+      assert(Math.abs(parseFloat(win.getComputedStyle(visual).fontSize)-16)<0.05,'12pt must be 16 CSSpx at 100% zoom');
+      const glyph=$('preview').querySelector('.katex-html .mord.mathnormal');assert(glyph,'Could not inspect a rendered glyph');
+      assert(win.getComputedStyle(glyph).color==='rgb(0, 0, 0)','Formula glyph is not black');
+    },true);
+    await test('Point size and hexadecimal color update the preview without changing LaTeX',async()=>{
+      await setFormula(fixture);const original=$('outputCode').value;
+      const firstWidth=$('preview').querySelector('.katex-html').getBoundingClientRect().width;
+      await setStyle(24,'#CC2200');
+      const visual=$('preview').querySelector('.katex');
+      assert(Math.abs(parseFloat(win.getComputedStyle(visual).fontSize)-32)<0.05,'24pt must be 32 CSSpx');
+      const secondWidth=$('preview').querySelector('.katex-html').getBoundingClientRect().width;
+      assert(Math.abs(secondWidth/firstWidth-2)<0.03,'Doubling point size did not double formula layout');
+      assert(win.getComputedStyle($('preview').querySelector('.katex-html .mord.mathnormal')).color==='rgb(204, 34, 0)','Hex color did not reach the rendered glyph');
+      assert($('formulaColorPicker').value==='#cc2200','Color picker did not synchronize with hex input');
+      assert($('outputCode').value===original,'Typography controls rewrote the LaTeX expression');
+    });
+    await test('The color picker synchronizes with the hexadecimal value and live preview',async()=>{
+      await setFormula(fixture);input('formulaColorPicker','#146bce');await nextFrame();
+      assert($('formulaColor').value.toLowerCase()==='#146bce','Hex input did not follow the color picker');
+      assert(win.getComputedStyle($('preview').querySelector('.katex-html .mord.mathnormal')).color==='rgb(20, 107, 206)','Picker color was not applied to the formula');
+    });
+    await test('Invalid size or color prevents image export and valid values recover',async()=>{
+      await setFormula(fixture);
+      for(const invalid of ['',0,97]){
+        input('formulaFontSize',invalid);await nextFrame();
+        assert($('exportPngButton').disabled&&$('exportSvgButton').disabled,'Invalid point size '+JSON.stringify(invalid)+' still permits image export');
+        assert($('formulaStyleError').textContent.trim(),'Invalid point size has no explanation');
+        await setStyle(12,'#000000');
+      }
+      input('formulaColor','#12zz56');await nextFrame();
+      assert($('exportPngButton').disabled&&$('exportSvgButton').disabled,'Invalid hex color still permits image export');
+      assert($('formulaStyleError').textContent.trim(),'Invalid hex color has no explanation');
+      await setStyle(12,'#000000');
+      assert(!$('exportPngButton').disabled&&!$('exportSvgButton').disabled,'Valid typography settings did not restore export');
+      assert(!$('formulaStyleError').textContent.trim(),'Typography error did not clear');
+    });
+    await test('SVG exports carry point-based physical dimensions and the selected color',async()=>{
+      const result=await win.WordImageExport.svg(fixture,{fontSizePt:12,color:'#cc2200',padding:16,background:'transparent'});
+      const svg=svgDocument(await result.blob.text());
+      for(const name of ['width','height']){
+        const attribute=svg.getAttribute(name);assert(/pt$/.test(attribute),'SVG '+name+' has no point unit');
+        assert(Math.abs(parseFloat(attribute)-result[name]*0.75)<0.001,'SVG '+name+' physical size does not match its CSS pixels');
+      }
+      const decoded=await raster(result.blob);assertInkColor(decoded,[204,34,0],'SVG');
+      const legacy=await win.WordImageExport.svg('x',{fontSize:28,color:'#000000'});
+      assert(Number.isFinite(legacy.width)&&legacy.width>0,'Legacy pixel-size API is broken');
+    });
+    await test('PNG stores correct density with valid CRC and retains the selected color',async()=>{
+      const vectors=await win.WordImageExport.svg(fixture,{fontSizePt:12,color:'#cc2200',padding:16});
+      const physicalSizes=[];
+      for(const ratio of [2,4]){
+        const result=await win.WordImageExport.png(fixture,{fontSizePt:12,color:'#cc2200',padding:16,pixelRatio:ratio});
+        const info=await pngMetadata(result.blob),expected=Math.round(96*ratio/0.0254);
+        assert(info.x===expected&&info.y===expected&&info.unit===1,'PNG density is not '+(96*ratio)+' DPI');
+        assert(info.width===result.width&&info.height===result.height,'PNG pixel dimensions do not match metadata');
+        assert(info.width===vectors.width*ratio&&info.height===vectors.height*ratio,'PNG pixel ratio is incorrect');
+        const decoded=await raster(result.blob,info);assertInkColor(decoded,[204,34,0],'PNG');
+        assert(decoded.pixels[3]===0,'Transparent PNG lost its transparent margin');
+        physicalSizes.push({width:info.width/info.x,height:info.height/info.y});
+      }
+      assert(Math.abs(physicalSizes[0].width/physicalSizes[1].width-1)<0.001,'PNG quality setting changed the physical width');
+      assert(Math.abs(physicalSizes[0].height/physicalSizes[1].height-1)<0.001,'PNG quality setting changed the physical height');
+    });
+    await test('Doubling the selected point size doubles exported glyphs, not merely the canvas',async()=>{
+      const measurements=[];
+      for(const size of [12,24]){
+        const result=await win.WordImageExport.png('x',{fontSizePt:size,color:'#000000',padding:16,pixelRatio:4});
+        const info=await pngMetadata(result.blob);measurements.push(await raster(result.blob,info));
+      }
+      assert(Math.abs(measurements[1].inkWidth/measurements[0].inkWidth-2)<0.15,'Exported glyph width did not scale with point size');
+      assert(Math.abs(measurements[1].inkHeight/measurements[0].inkHeight-2)<0.15,'Exported glyph height did not scale with point size');
+    });
+    await test('Image buttons apply the selected typography and ignore preview-only zoom',async()=>{
+      await setFormula(fixture);await setStyle(18,'#146bce');
+      const original=$('outputCode').value;
+      const first=await captureDownload(()=>$('exportSvgButton').click(),'.svg');
+      const expected=svgDocument(await first.blob.text());assertInkColor(await raster(first.blob),[20,107,206],'UI SVG');
+      $('previewZoomIn').click();$('previewZoomIn').click();$('previewZoomIn').click();
+      const second=await captureDownload(()=>$('exportSvgButton').click(),'.svg');
+      const actual=svgDocument(await second.blob.text());
+      assert(actual.getAttribute('width')===expected.getAttribute('width')&&actual.getAttribute('height')===expected.getAttribute('height'),'Preview zoom changed exported physical dimensions');
+      const expectedApi=await win.WordImageExport.svg(fixture,{fontSizePt:18,color:'#146bce',padding:16});
+      assert(Math.abs(parseFloat(actual.getAttribute('width'))-expectedApi.width*0.75)<0.001,'UI did not pass the selected point size to SVG export');
+      input('pngScale','2');const png=await captureDownload(()=>$('exportPngButton').click(),'.png');
+      const info=await pngMetadata(png.blob);assert(info.x===Math.round(192/0.0254),'UI PNG ignored its requested resolution');
+      assertInkColor(await raster(png.blob,info),[20,107,206],'UI PNG');
+      assert($('outputCode').value===original,'Image styling or zoom changed source code');
+    });
+    await test('Explicit LaTeX colors remain intact while the selected default color is applied',async()=>{
+      const latex=String.raw`\color{blue}{x}`;
+      await setFormula(latex);await setStyle(18,'#cc2200');
+      assert(win.getComputedStyle($('preview').querySelector('.katex-html .mord.mathnormal')).color==='rgb(0, 0, 255)','Preview lost the explicit LaTeX color');
+      const result=await win.WordImageExport.png(latex,{fontSizePt:18,color:'#cc2200',padding:16,pixelRatio:3});
+      const info=await pngMetadata(result.blob);assertInkColor(await raster(result.blob,info),[0,0,255],'Explicit LaTeX color');
+      assert($('outputCode').value===latex,'Selecting a default color rewrote explicit LaTeX color code');
+    });
+    await test('Saving and reopening the offline tool resets typography and preserves working exports',async()=>{
+      await setFormula(String.raw`\sigma_{PRIVATEFIXTURE}`);await setStyle(24,'#146bce');
+      const saved=await captureDownload(()=>$('downloadApp').click(),'.html'),html=await saved.blob.text();
+      assert(!html.includes('PRIVATEFIXTURE'),'Saved HTML contains the previous user formula');
+      const parsed=new DOMParser().parseFromString(html,'text/html');
+      assert(Number(parsed.getElementById('formulaFontSize').value)===12,'Saved HTML does not reset point size to12');
+      assert(parsed.getElementById('formulaColor').value.toLowerCase()==='#000000','Saved HTML does not reset color toblack');
+      const restored=document.createElement('iframe');restored.className='saved-app';restored.title='Saved offline typography app';
+      try{
+        const loaded=new Promise(resolve=>restored.onload=resolve);restored.srcdoc=html;document.body.append(restored);await timeout(loaded,12000,'Saved HTML load');
+        const again=restored.contentWindow,againDoc=again.document;
+        assert(Number(againDoc.getElementById('formulaFontSize').value)===12&&againDoc.getElementById('formulaColorPicker').value==='#000000','Reopened app has inconsistent defaults');
+        const area=againDoc.getElementById('outputCode');area.value='x';area.dispatchEvent(new again.Event('input',{bubbles:true}));
+        await againDoc.fonts.ready;
+        assert(Math.abs(parseFloat(again.getComputedStyle(againDoc.querySelector('#preview .katex')).fontSize)-16)<0.05,'Reopened preview has the wrong nominal size');
+        const result=await again.WordImageExport.png('x',{fontSizePt:12,color:'#000000',pixelRatio:2});
+        const info=await pngMetadata(result.blob);assert(info.x===Math.round(192/0.0254),'Reopened PNG lost physical size metadata');
+        assertInkColor(await raster(result.blob,info),[0,0,0],'Reopened PNG');
+        const requests=again.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name));
+        assert(requests.length===0,'Reopened offline app requested a network dependency');
+      }finally{restored.remove();}
+    });
+  }catch(error){typographyResults.push({name:'Harness',pass:false,error:error.message});const li=document.createElement('li');li.className='fail';li.textContent='HARNESS ERROR: '+error.message;document.getElementById('results').append(li);}
+  document.getElementById('summary').textContent=typographyResults.filter(result=>result.pass).length+' / '+typographyResults.length+' passed — complete';
+  globalThis.typographyComplete=true;
+  try{await reset();await setFormula(fixture);}catch{}
+});
+</script>
+</html>

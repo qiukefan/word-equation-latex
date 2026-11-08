@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Equation conversion regressions</title>
+<style>body{font:15px system-ui;max-width:1100px;margin:40px auto;padding:20px}li{margin:12px 0;overflow-wrap:anywhere}.fail{color:#b00}.pass{color:#08763a}code{display:block;font:12px monospace}</style>
+<h1>Equation conversion regressions</h1><p id="summary">Running…</p><ol id="results"></ol>
+<script src="../src/converter.js"></script><script src="fixtures.js"></script>
+<script>
+const results = runWordLatexRegressions();
+document.getElementById('summary').textContent = results.filter(r=>r.pass).length+' / '+results.length+' passed';
+for(const result of results){const li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+result.name;const code=document.createElement('code');code.textContent=result.error||result.output;li.append(code);document.getElementById('results').append(li);}
+globalThis.regressionResults = results;
+</script>
