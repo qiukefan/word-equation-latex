@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Large local DOCX import tests</title>
+<style>body{font:14px/1.6 system-ui;max-width:1200px;margin:24px auto;padding:0 20px;background:#f8faf7;color:#24352a}.pass{color:#167238}.fail{color:#b42318}li{margin:10px 0}iframe{width:100%;height:850px;border:1px solid #d9e1d6}#summary{font-weight:600}</style>
+<h1>Large local DOCX import tests</h1>
+<p>Generates synthetic ZIP containers in memory. Tests documents above the former 30 MiB file and 20 MiB XML thresholds, with a small fraction as the only equation. No user files, clipboard, downloads, or external requests are used.</p>
+<p id="summary">Loading…</p><ol id="results"></ol>
+<iframe id="app" title="Application under test" src="../dist/index.html?lang=en"></iframe>
+<script>
+'use strict';
+const frame=document.getElementById('app'),results=[];
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document,$=id=>doc.getElementById(id),MiB=1024*1024;
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+  const waitFor=async(condition,label)=>{const start=performance.now();while(!condition()){if(performance.now()-start>20000)throw new Error(label+' timed out');await pause(25);}};
+  const encode=text=>new win.TextEncoder().encode(text);
+  const equation='<w:p><m:oMath><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath></w:p>';
+  const xml=(padding=0,kind='document')=>'<?xml version="1.0" encoding="UTF-8"?><w:'+kind+' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">'+(padding?'<!--'+'x'.repeat(padding)+'-->':'')+(kind==='document'?'<w:body>'+equation+'</w:body>':equation)+'</w:'+kind+'>';
+  const pack=entries=>win.fflate.zipSync(entries,{level:6});
+  const asFile=(bytes,name)=>new win.File([bytes],name,{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+  async function importFile(file){
+    $('clearButton').click();
+    const transfer=new win.DataTransfer();transfer.items.add(file);$('fileInput').files=transfer.files;$('fileInput').dispatchEvent(new win.Event('change',{bubbles:true}));
+    await waitFor(()=>!$('convertButton').disabled,'DOCX import');
+    assert($('outputCode').value.replace(/\s/g,'')==='\\frac{a}{b}','Unexpected imported equation: '+$('status').textContent);
+    assert($('preview').querySelector('.katex'),'Imported equation did not render');
+    assert($('fileInput').files.length===0,'File picker retained the imported file');
+  }
+  async function rejects(bytes,label){let error;try{await win.WordDocx.extract(bytes);}catch(caught){error=caught;}assert(error instanceof win.Error||error instanceof Error,label+' was accepted');}
+  async function test(name,body){
+    try{await body();results.push({name,pass:true});}catch(error){results.push({name,pass:false,error:error.message});}
+    const result=results[results.length-1],li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name+(result.error?' — '+result.error:'');document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=results.filter(result=>result.pass).length+' / '+results.length+' passed';
+    await pause(0);
+  }
+  let largeArchive;
+  await test('A byte-array DOCX above 30 MiB extracts only its native equation XML',async()=>{
+    largeArchive=pack({'word/document.xml':encode(xml()),'word/media/unused.bin':[new win.Uint8Array(31*MiB),{level:0}]});
+    assert(largeArchive.byteLength>30*MiB,'Fixture does not exceed the former file limit');
+    const result=await win.WordDocx.extract(largeArchive);
+    assert(result.parts.length===1&&result.parts[0].name==='word/document.xml','Irrelevant media was extracted');
+    assert(result.parts[0].xml===xml(),'Equation XML changed');
+  });
+  await test('A File above 30 MiB imports and renders through the real app controls',async()=>{
+    assert(largeArchive,'Large archive fixture unavailable');
+    await importFile(asFile(largeArchive,'synthetic-31-mib.docx'));
+  });
+  largeArchive=null;
+  await test('Compressed document XML above 20 MiB imports and renders locally',async()=>{
+    const content=encode(xml(21*MiB));assert(content.byteLength>20*MiB,'XML fixture is too small');
+    const archive=pack({'word/document.xml':content});assert(archive.byteLength<MiB,'Fixture does not exercise compressed XML expansion');
+    await importFile(asFile(archive,'synthetic-21-mib-xml.docx'));
+  });
+  await test('Multiple selected XML parts may total more than 20 MiB',async()=>{
+    const archive=pack({'word/document.xml':encode(xml(11*MiB)),'word/header1.xml':encode(xml(11*MiB,'hdr'))});
+    const result=await win.WordDocx.extract(archive.buffer);
+    assert(result.parts.length===2,'Expected document and header XML');
+    assert(result.parts[0].name==='word/document.xml'&&result.parts[1].name==='word/header1.xml','Document order changed');
+    assert(result.parts.reduce((total,part)=>total+part.xml.length,0)>20*MiB,'Combined XML fixture is too small');
+    await importFile(asFile(archive,'synthetic-22-mib-parts.docx'));
+    const choices=$('equationItems').children;
+    assert(choices.length===2,'Import did not preserve both equations');
+    assert(choices[0].title.startsWith('word/document.xml')&&choices[1].title.startsWith('word/header1.xml'),'Imported equation order or source labels changed');
+    choices[1].click();assert($('equationPosition').textContent==='2 / 2','Second imported equation could not be selected');
+  });
+  await test('Corrupt CRC and truncated ZIP containers are still rejected',async()=>{
+    const archive=win.fflate.zipSync({'word/document.xml':encode(xml())},{level:0}),damaged=archive.slice();
+    const header=new win.DataView(damaged.buffer,damaged.byteOffset,damaged.byteLength);
+    const payloadOffset=30+header.getUint16(26,true)+header.getUint16(28,true);damaged[payloadOffset]^=1;
+    await rejects(damaged,'CRC corruption');await rejects(archive.slice(0,-1),'Truncated ZIP');
+  });
+  await test('XML document-type declarations remain rejected and no HTTP assets are loaded',async()=>{
+    const content=xml().replace('<?xml version="1.0" encoding="UTF-8"?>','<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE document>');
+    await rejects(pack({'word/document.xml':encode(content)}),'XML document type declaration');
+    assert(win.performance.getEntriesByType('resource').filter(entry=>/^https?:/.test(entry.name)).length===0,'App loaded an HTTP resource');
+  });
+  document.getElementById('summary').textContent=results.filter(result=>result.pass).length+' / '+results.length+' passed — complete';
+});
+</script>

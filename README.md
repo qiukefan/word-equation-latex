@@ -35,7 +35,7 @@
 ### 功能
 
 - 解析 Word 原生公式（OMML）、MathML，以及部分 Unicode 线性公式；支持输入和编辑 LaTeX。
-- 本地读取 DOCX，逐条选择公式，编辑和复制 LaTeX。
+- 本地读取 DOCX，逐条选择公式，编辑和复制 LaTeX。导入不设固定文件大小或 XML 正文总量上限，实际可处理大小取决于可用内存。
 - 内置 11 种数学字体样式，4–96 pt 字号和十六进制颜色。
 - 实时排版、缩放和适应宽度；缩放仅影响查看。
 - 导出当前公式的 PNG 和 SVG，使用所选字体、字号和颜色；支持透明或白色背景，PNG 支持清晰度设置。
@@ -90,6 +90,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 | `fonts.html` | 字体选择与导出 |
 | `privacy.html` | 本地 DOCX 处理与网络连接限制 |
 | `i18n.html` | 中英文切换、编辑状态保留与离线导出 |
+| `large-docx.html` | 大文件与大正文导入、损坏文件校验 |
 
 本地服务器只用于开发测试，日常使用不需要。测试使用合成数据，不需要上传或提供个人 Word 文档。
 
@@ -131,7 +132,7 @@ For fully offline use, click **Save offline HTML** at the bottom of the page, th
 ### Features
 
 - Parse native Word equations (OMML), MathML, and a subset of Unicode linear equations; enter and edit LaTeX directly.
-- Read DOCX files locally, select individual equations, and edit or copy their LaTeX.
+- Read DOCX files locally, select individual equations, and edit or copy their LaTeX. Import has no fixed file-size or aggregate XML-size cap; practical capacity depends on available memory.
 - Choose from 11 built-in mathematical font styles, sizes from 4 to 96 pt, and hexadecimal colors.
 - Preview equations as you edit, zoom, and fit to width; zoom affects viewing only.
 - Export the selected equation as PNG or SVG using the selected font style, size, and color. Transparent and white backgrounds are available, with a resolution setting for PNG.
@@ -186,6 +187,7 @@ Open the test pages under `http://127.0.0.1:8000/tests/` in a browser and inspec
 | `fonts.html` | Font selection and exports |
 | `privacy.html` | Local DOCX processing and blocked network connections |
 | `i18n.html` | Language switching, preserved edits, and offline exports |
+| `large-docx.html` | Large-file and large-XML import, malformed archive validation |
 
 The local server is for development tests only; normal use does not require it. Tests use synthetic data and do not require uploading or providing personal Word documents.
 

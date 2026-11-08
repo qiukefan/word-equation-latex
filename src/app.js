@@ -301,10 +301,15 @@
         const doc = new DOMParser().parseFromString(part.xml, 'application/xml');
         if (doc.getElementsByTagName('parsererror').length) throw new Error(t('文档中的 {part} XML 无法解析。', { part: part.name }));
         const math = [...doc.getElementsByTagNameNS('*', 'oMath')]; if (!math.length) continue;
-        mathSources.push(...math.map((node) => new XMLSerializer().serializeToString(node)));
-        const converted = WordLatex.convert(part.xml, 'omml');
-        equations.push(...converted.equations.map((equation) => ({ ...equation, part: part.name })));
-        notices.push(...converted.warnings);
+        // Convert only native equations, so long document text does not pass
+        // through the converter's separate clipboard-input size guard.
+        for (const node of math) {
+          const source = new XMLSerializer().serializeToString(node);
+          mathSources.push(source);
+          const converted = WordLatex.convert(source, 'omml');
+          for (const equation of converted.equations) equations.push({ ...equation, part: part.name });
+          for (const warning of converted.warnings) notices.push(warning);
+        }
       }
       if (!equations.length) throw new Error(t('文档中没有找到 Word 原生公式。图片、扫描公式和旧版 Equation Editor / MathType 嵌入对象无法直接提取。'));
       if (legacy) notices.push(t('文档包含嵌入对象，可能有旧版 Equation Editor 或 MathType 公式未被提取。这里只列出 Word 原生公式。'));
