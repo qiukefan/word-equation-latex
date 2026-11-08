@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Chinese / English interface tests</title>
+<style>body{font:14px/1.6 system-ui;max-width:1200px;margin:24px auto;padding:0 20px;background:#f8faf7}.pass{color:#167238}.fail{color:#b42318}li{margin:10px 0}iframe{width:100%;height:850px;border:1px solid #d9e1d6}#summary{font-weight:600}</style>
+<h1>Chinese / English interface tests</h1><p>Synthetic equations only. No clipboard access, user files, downloads or external requests.</p>
+<p id="summary">Loading…</p><ol id="results"></ol>
+<iframe id="app" title="Application under test" src="../dist/index.html?lang=en"></iframe>
+<script>
+'use strict';
+const frame=document.getElementById('app'),results=[];
+frame.addEventListener('load',async()=>{
+  const win=frame.contentWindow,doc=win.document,$=id=>doc.getElementById(id);
+  const assert=(value,message)=>{if(!value)throw new Error(message);};
+  const event=(id,type)=>$(id).dispatchEvent(new win.Event(type,{bubbles:true}));
+  const select=(id,value)=>{$(id).value=value;event(id,'change');};
+  const input=(id,value)=>{$(id).value=value;event(id,'input');};
+  const language=value=>select('languageSelect',value);
+  const han=/[\u3400-\u9fff]/;
+  async function test(name,body){
+    try{await body();results.push({name,pass:true});}catch(error){results.push({name,pass:false,error:error.message});}
+    const result=results[results.length-1],li=document.createElement('li');li.className=result.pass?'pass':'fail';li.textContent=(result.pass?'PASS: ':'FAIL: ')+name+(result.error?' — '+result.error:'');document.getElementById('results').append(li);
+    document.getElementById('summary').textContent=results.filter(r=>r.pass).length+' / '+results.length+' passed';
+  }
+  await test('English deep link initializes the header switch and main controls',()=>{
+    assert(doc.documentElement.lang==='en','English document language missing');
+    assert($('languageSelect').value==='en'&&$('languageSelect').closest('header'),'Language switch is not in the header');
+    for(const id of ['convertButton','importButton','exportButton','exportMdButton','helpButton','privacyNote','formulaFontHint','downloadApp'])assert(!han.test($(id).textContent),'Untranslated control: '+id);
+    for(const id of ['sourceInput','outputCode','formulaFontSize','formulaColor'])assert(!han.test($(id).getAttribute('aria-label')||''),'Untranslated accessible name: '+id);
+  });
+  await test('Switching languages preserves edits, formula selection, typography and zoom',()=>{
+    input('sourceInput','<math><mi>a</mi></math><math><mi>b</mi></math>');select('inputMode','mathml');$('convertButton').click();
+    assert($('equationItems').children.length===2,'Expected two equations');$('equationItems').children[1].click();
+    input('outputCode','\\text{中文}+a^2-b^2');select('formulaFontFamily','bold');input('formulaFontSize','18');input('formulaColor','#146bce');select('outputMode','dollars');$('previewZoomIn').click();
+    const source=$('sourceInput').value,output=$('outputCode').value,zoom=$('previewZoomReset').textContent,position=$('equationPosition').textContent;
+    for(const locale of ['zh','en','zh','en']){
+      language(locale);assert(doc.documentElement.lang.startsWith(locale),'Document locale out of sync');
+      assert($('sourceInput').value===source&&$('outputCode').value===output,'Language switch changed user content');
+      assert($('equationPosition').textContent===position,'Selected equation changed');
+      assert($('formulaFontFamily').value==='bold'&&$('formulaFontSize').value==='18'&&$('formulaColor').value==='#146bce','Typography changed');
+      assert($('previewZoomReset').textContent===zoom&&$('preview').querySelector('.katex'),'Preview changed or disappeared');
+    }
+  });
+  await test('Existing status messages, validation errors and font options switch both ways',()=>{
+    input('formulaFontSize','1');assert(!han.test($('formulaStyleError').textContent)&&$('formulaStyleError').textContent.trim(),'English validation missing');
+    language('zh');assert(han.test($('formulaStyleError').textContent),'Existing error did not switch to Chinese');
+    language('en');assert(!han.test($('formulaStyleError').textContent),'Existing error did not switch back');input('formulaFontSize','18');
+    assert([...$('formulaFontFamily').options].every(option=>!han.test(option.textContent)),'Untranslated font option');
+    $('clearButton').click();$('convertButton').click();assert($('status').textContent.trim()&&!han.test($('status').textContent),'English converter error missing');
+    language('zh');assert(han.test($('status').textContent),'Converter error did not switch to Chinese');language('en');
+  });
+  await test('English text exports keep LaTeX and the selected delimiters unchanged',async()=>{
+    const formula='a^2-b^2=(a-b)(a+b)';input('outputCode',formula);select('outputMode','dollars');
+    const downloads=[],create=win.URL.createObjectURL,click=win.HTMLAnchorElement.prototype.click;
+    win.URL.createObjectURL=blob=>{downloads.push(blob);return create.call(win.URL,blob);};win.HTMLAnchorElement.prototype.click=function(){};
+    try{$('exportButton').click();$('exportMdButton').click();}finally{win.URL.createObjectURL=create;win.HTMLAnchorElement.prototype.click=click;}
+    assert(downloads.length===2,'Text export failed');
+    for(const blob of downloads){const text=await blob.text();assert(text.includes('$$\n'+formula+'\n$$'),'Export changed equation or delimiters');}
+  });
+  await test('English UI exports self-contained SVG and PNG with selected typography',async()=>{
+    const options={fontFamily:'bold',fontSizePt:18,color:'#146bce',pixelRatio:2};
+    const svg=await win.WordImageExport.svg('a^2-b^2=(a-b)(a+b)',options),markup=await svg.blob.text();
+    assert(markup.includes('#146bce')&&markup.includes('<path'),'SVG lost selected color or vector glyphs');
+    const png=await win.WordImageExport.png('a^2-b^2=(a-b)(a+b)',options);
+    assert(Array.from(new Uint8Array(await png.blob.slice(0,8).arrayBuffer())).join(',')==='137,80,78,71,13,10,26,10','PNG invalid');
+  });
+  await test('Offline download keeps language and embedded assets but removes user data',async()=>{
+    input('outputCode','\\text{LOCAL_ONLY_FIXTURE_5813}');let blob;
+    const create=win.URL.createObjectURL,click=win.HTMLAnchorElement.prototype.click;
+    win.URL.createObjectURL=value=>{blob=value;return create.call(win.URL,value);};win.HTMLAnchorElement.prototype.click=function(){};
+    try{$('downloadApp').click();}finally{win.URL.createObjectURL=create;win.HTMLAnchorElement.prototype.click=click;}
+    assert(blob,'Offline download missing');const text=await blob.text(),saved=new DOMParser().parseFromString(text,'text/html');
+    assert(!text.includes('LOCAL_ONLY_FIXTURE_5813'),'User data leaked to saved tool');
+    assert(saved.documentElement.lang==='en','Saved tool lost its language');
+    assert(saved.getElementById('languageSelect'),'Saved tool lost language switch');
+    assert(!saved.querySelector('script[src],link[rel="stylesheet"]'),'Offline copy added remote dependencies');
+    assert(saved.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("connect-src 'none'"),'Network prohibition lost');
+    const reopened=document.createElement('iframe');reopened.title='Saved offline app';reopened.hidden=true;
+    const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Saved app load timed out')),10000);reopened.onload=()=>{clearTimeout(timer);resolve();};});
+    reopened.srcdoc=text;document.body.append(reopened);
+    try{await loaded;const offline=reopened.contentDocument;assert(offline.documentElement.lang==='en'&&offline.getElementById('languageSelect').value==='en','Reopened offline app lost English');assert(!han.test(offline.getElementById('status').textContent),'Reopened offline status is untranslated');assert(offline.getElementById('outputCode').value==='','Reopened app retained user code');}finally{reopened.remove();}
+  });
+  document.getElementById('summary').textContent=results.filter(r=>r.pass).length+' / '+results.length+' passed — complete';
+});
+</script>

@@ -5,6 +5,7 @@
  */
 (function (root) {
   'use strict';
+  const t = (message) => root.WordI18n ? root.WordI18n.t(message) : message;
   const definitions = [
     ['default', '默认数学字体', '', '保留公式原有字体与数学排版。'],
     ['roman', '正体 · Roman', 'mathrm', '字母使用正体；保留公式中单独指定的字体。'],
@@ -18,7 +19,7 @@
     ['sans', '无衬线 · Sans serif', 'mathsf', '字母与数字使用无衬线字体；不支持的字符保留数学字形。'],
     ['typewriter', '等宽 · Typewriter', 'mathtt', '字母与数字使用等宽字体；不支持的字符保留数学字形。']
   ];
-  const options = Object.freeze(definitions.map(([id, label, command, hint]) => Object.freeze({id, label, command, hint})));
+  const options = Object.freeze(definitions.map(([id, label, command, hint]) => Object.freeze({id, get label() { return t(label); }, command, get hint() { return t(hint); }})));
   const byId = new Map(options.map((option) => [option.id, option]));
   const commands = [...new Set(options.map((option) => option.command).filter(Boolean)), 'mathnormal'];
   const markerPrefix = 'wordFormulaFontMarker';
@@ -55,7 +56,7 @@
 
   function get(id = 'default') {
     const option = byId.get(id);
-    if (!option) throw new Error('未知的公式字体，请从字体下拉框中重新选择。');
+    if (!option) throw new Error(t('未知的公式字体，请从字体下拉框中重新选择。'));
     return option;
   }
 
@@ -114,13 +115,13 @@
 
   function renderToString(latex, fontFamily = 'default', settings = {}) {
     const option = get(fontFamily);
-    if (typeof latex !== 'string') throw new Error('公式代码必须是文本。');
-    if (!root.katex) throw new Error('离线公式字体组件未加载，请重新打开 HTML 文件。');
+    if (typeof latex !== 'string') throw new Error(t('公式代码必须是文本。'));
+    if (!root.katex) throw new Error(t('离线公式字体组件未加载，请重新打开 HTML 文件。'));
     const source = sourceWithFont(latex, option);
     const renderSettings = {...settings, trust: false};
     if (renderSettings.output !== 'mathml') return root.katex.renderToString(source, renderSettings);
     if (source.includes(markerPrefix) || source.includes(macroPrefix) || source.includes(markerColor) || source.includes(declarationColor)) {
-      throw new Error('公式包含工具保留的字体标记名称，请修改该名称后重试。');
+      throw new Error(t('公式包含工具保留的字体标记名称，请修改该名称后重试。'));
     }
     // A group keeps helper definitions local even when globalGroup is requested.
     const tree = root.katex.__renderToDomTree('{\n' + prelude + source + '\n}', renderSettings);

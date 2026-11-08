@@ -30,6 +30,7 @@ if '/* KATEX_CSS */' not in html:
     raise ValueError('The HTML template is missing its KaTeX stylesheet placeholder')
 html = html.replace('/* KATEX_CSS */', inline_katex_fonts(root))
 for marker, path in [
+    ('I18N_BUNDLE', 'src/i18n.js'),
     ('KATEX_BUNDLE', 'vendor/katex.min.js'),
     ('FORMULA_FONTS_BUNDLE', 'src/formula-fonts.js'),
     ('MATHJAX_BUNDLE', 'vendor/mathjax-mml-svg.js'),

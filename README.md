@@ -21,6 +21,8 @@
 2. 从 Word 复制公式后粘贴，或选择 `.docx` 文件提取公式。
 3. 选择字体、字号和颜色，复制代码或导出结果。
 
+页面右上角提供 **中文 / English** 语言切换；切换不会清除当前公式或改变字体、字号、颜色。默认中文，也可通过 [英文入口](https://qiukefan.github.io/word-equation-latex/?lang=en) 直接打开英文界面。语言切换同样支持离线使用。
+
 需要完全断网使用时，点击网页底部的“保存离线 HTML”，以后直接打开保存的文件。也可以下载仓库（**Code → Download ZIP**）并解压，双击 [`Word公式转LaTeX.html`](Word公式转LaTeX.html)。HTML 内嵌全部脚本和字体，无需安装 Node.js、启动服务器、登录或调用在线 API。浏览器若无法取得 Word 的原生剪贴板数据，可使用本地 DOCX 导入。
 
 ### 在线访问与文档隐私
@@ -87,6 +89,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 | `typography.html` | 字号与颜色 |
 | `fonts.html` | 字体选择与导出 |
 | `privacy.html` | 本地 DOCX 处理与网络连接限制 |
+| `i18n.html` | 中英文切换、编辑状态保留与离线导出 |
 
 本地服务器只用于开发测试，日常使用不需要。测试使用合成数据，不需要上传或提供个人 Word 文档。
 
@@ -110,11 +113,13 @@ Convert native Word equations, MathML, Unicode equations, or LaTeX into editable
 
 ### Quick start
 
-1. Open the **[web app](https://qiukefan.github.io/word-equation-latex/)** in Chrome, Edge, or Safari.
+1. Open the **[web app in English](https://qiukefan.github.io/word-equation-latex/?lang=en)** in Chrome, Edge, or Safari.
 2. Paste an equation copied from Word, or select a `.docx` file to extract its equations.
 3. Choose a font style, size, and color, then copy the code or export the result.
 
-For fully offline use, click “保存离线 HTML” (Save offline HTML) at the bottom of the page, then open that saved file whenever you need it. Alternatively, download the repository with **Code → Download ZIP**, extract it, and open [`Word公式转LaTeX.html`](Word公式转LaTeX.html). The HTML embeds all scripts and fonts. No Node.js installation, server, account, or online API is required. If the browser cannot access Word's native clipboard equation data, use the local DOCX importer.
+Use **中文 / English** in the upper-right corner to change the interface language. Switching preserves the current equations, edits, font, size, and color. Chinese is the default; the English link above opens the app with `?lang=en`. Both languages work fully offline.
+
+For fully offline use, click **Save offline HTML** at the bottom of the page, then open that saved file whenever you need it. Alternatively, download the repository with **Code → Download ZIP**, extract it, and open [`Word公式转LaTeX.html`](Word公式转LaTeX.html). The HTML embeds all scripts and fonts. No Node.js installation, server, account, or online API is required. If the browser cannot access Word's native clipboard equation data, use the local DOCX importer.
 
 ### Online access and document privacy
 
@@ -180,6 +185,7 @@ Open the test pages under `http://127.0.0.1:8000/tests/` in a browser and inspec
 | `typography.html` | Font size and color |
 | `fonts.html` | Font selection and exports |
 | `privacy.html` | Local DOCX processing and blocked network connections |
+| `i18n.html` | Language switching, preserved edits, and offline exports |
 
 The local server is for development tests only; normal use does not require it. Tests use synthetic data and do not require uploading or providing personal Word documents.
 

@@ -12,6 +12,44 @@
  */
 (function (root) {
   'use strict';
+  // Local translations only; standalone conversion tests keep the Chinese fallback.
+  if (root.WordI18n) root.WordI18n.register({
+    "公式字号超出支持范围。": "Equation font size is outside the supported range.",
+    "图片留白超出支持范围。": "Image padding is outside the supported range.",
+    "PNG 清晰度超出支持范围。": "PNG resolution is outside the supported range.",
+    "请选择透明或白色图片背景。": "Choose a transparent or white image background.",
+    "公式颜色应为十六进制色值，例如 #000000。": "The equation color must be a hexadecimal value, such as #000000.",
+    "请先转换或输入需要导出的公式。": "Convert or enter an equation before exporting it.",
+    "公式过长，请拆分后分别导出。": "The equation is too long. Split it into smaller equations and export them separately.",
+    "公式排版组件未加载，请重新打开 HTML 文件。": "The equation typesetting component is not loaded. Reopen the HTML file.",
+    "公式代码存在错误，暂时无法导出图片：{detail}": "The equation code contains an error and cannot be exported as an image: {detail}",
+    "无法读取公式结构，请检查 LaTeX 代码。": "The equation structure could not be read. Check the LaTeX code.",
+    "这条公式含有无法导出为矢量图的内容。": "This equation contains content that cannot be exported as vector graphics.",
+    "图片导出不支持外部链接或外部图像，请移除这些命令后重试。": "Image export does not support external links or images. Remove these commands and try again.",
+    "这条公式暂时无法转换为图片，请检查公式代码。": "This equation could not be converted to an image. Check the equation code.",
+    "公式含有内置矢量字库暂不支持的字符（例如部分中文或特殊符号），无法保证图片一致。请改用支持的数学符号后重试。": "The equation contains characters unsupported by the bundled vector fonts, such as some Chinese characters or special symbols. Use supported mathematical symbols and try again.",
+    "这条公式含有无法独立保存的图像内容。": "This equation contains image content that cannot be saved as a standalone file.",
+    "公式含有不支持的图像样式。": "The equation contains unsupported image styles.",
+    "图片导出不允许依赖外部文件。": "Exported images cannot depend on external files.",
+    "矢量图仍包含字形引用，请重新打开 HTML 后再试。": "The vector image still contains glyph references. Reopen the HTML file and try again.",
+    "公式没有可见内容，无法导出空白图片。": "The equation has no visible content. An empty image cannot be exported.",
+    "离线图片导出组件未加载，请重新打开 HTML 文件。": "The offline image export component is not loaded. Reopen the HTML file.",
+    "离线图片导出组件初始化失败，请重新打开 HTML 文件。": "The offline image export component could not initialize. Reopen the HTML file.",
+    "离线矢量组件不可用，请重新打开 HTML 文件。": "The offline vector component is unavailable. Reopen the HTML file.",
+    "无法生成公式图片：{detail}": "The equation image could not be generated: {detail}",
+    "未生成有效的矢量公式。": "No valid vector equation was generated.",
+    "公式图片尺寸无效。": "The equation image dimensions are invalid.",
+    "公式图片过大，请拆分公式后导出。": "The equation image is too large. Split the equation before exporting.",
+    "数学公式": "Mathematical equation",
+    "浏览器生成的 PNG 格式无效，请改用 SVG 导出。": "The browser generated an invalid PNG file. Export as SVG instead.",
+    "无法写入 PNG 分辨率，请改用 SVG 导出。": "PNG resolution metadata could not be written. Export as SVG instead.",
+    "PNG 尺寸过大，请降低清晰度或拆分公式；也可以导出 SVG。": "The PNG image is too large. Lower its resolution, split the equation, or export as SVG.",
+    "浏览器无法创建图片画布，请改用 SVG 导出。": "The browser could not create an image canvas. Export as SVG instead.",
+    "浏览器无法读取生成的矢量图，请改用 SVG 导出。": "The browser could not read the generated vector image. Export as SVG instead.",
+    "PNG 生成失败，请改用 SVG 导出。": "PNG generation failed. Export as SVG instead.",
+    "浏览器无法保存 PNG，请改用 SVG 导出。": "The browser could not save the PNG file. Export as SVG instead."
+  });
+  const t = (message, params) => root.WordI18n ? root.WordI18n.t(message, params) : message.replace(/\{(\w+)\}/g, (match, name) => params && Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match);
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const MAX_DIMENSION = 8192;
   const MAX_PIXELS = 32000000;
@@ -20,19 +58,19 @@
   function numberOption(value, fallback, min, max, label) {
     if (value === undefined) return fallback;
     const number = Number(value);
-    if (!Number.isFinite(number) || number < min || number > max) throw new Error(label + '超出支持范围。');
+    if (!Number.isFinite(number) || number < min || number > max) throw new Error(t(label + '超出支持范围。'));
     return number;
   }
 
   function readOptions(options) {
     const background = options.background === undefined ? 'transparent' : options.background;
-    if (!['transparent', 'white'].includes(background)) throw new Error('请选择透明或白色图片背景。');
+    if (!['transparent', 'white'].includes(background)) throw new Error(t("请选择透明或白色图片背景。"));
     const fontSizePt = options.fontSizePt !== undefined
       ? numberOption(options.fontSizePt, 12, 4, 96, '公式字号')
       : options.fontSize === undefined ? 12 : undefined;
     let color = options.color === undefined ? INK : options.color;
     if (typeof color !== 'string' || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
-      throw new Error('公式颜色应为十六进制色值，例如 #000000。');
+      throw new Error(t("公式颜色应为十六进制色值，例如 #000000。"));
     }
     color = color.toLowerCase();
     if (color.length === 4) color = '#' + [...color.slice(1)].map((digit) => digit + digit).join('');
@@ -48,9 +86,9 @@
   }
 
   function mathmlFromLatex(latex, fontFamily) {
-    if (typeof latex !== 'string' || !latex.trim()) throw new Error('请先转换或输入需要导出的公式。');
-    if (latex.length > 200000) throw new Error('公式过长，请拆分后分别导出。');
-    if (!root.katex) throw new Error('公式排版组件未加载，请重新打开 HTML 文件。');
+    if (typeof latex !== 'string' || !latex.trim()) throw new Error(t("请先转换或输入需要导出的公式。"));
+    if (latex.length > 200000) throw new Error(t("公式过长，请拆分后分别导出。"));
+    if (!root.katex) throw new Error(t("公式排版组件未加载，请重新打开 HTML 文件。"));
     let markup;
     try {
       markup = root.WordFormulaFonts.renderToString(latex, fontFamily, {
@@ -58,18 +96,18 @@
         trust: false, strict: 'ignore', maxExpand: 1000, maxSize: 20
       });
     } catch (error) {
-      throw new Error('公式代码存在错误，暂时无法导出图片：' + String(error.message).replace(/^KaTeX parse error:\s*/, '').slice(0, 200));
+      throw new Error(t('公式代码存在错误，暂时无法导出图片：{detail}', {detail: String(error.message).replace(/^KaTeX parse error:\s*/, '').slice(0, 200)}));
     }
     const doc = new DOMParser().parseFromString(markup, 'application/xml');
     const math = doc.querySelector('math');
-    if (!math || doc.querySelector('parsererror')) throw new Error('无法读取公式结构，请检查 LaTeX 代码。');
+    if (!math || doc.querySelector('parsererror')) throw new Error(t("无法读取公式结构，请检查 LaTeX 代码。"));
     math.querySelectorAll('annotation,annotation-xml').forEach((node) => node.remove());
-    if (math.querySelector('merror,mglyph')) throw new Error('这条公式含有无法导出为矢量图的内容。');
+    if (math.querySelector('merror,mglyph')) throw new Error(t("这条公式含有无法导出为矢量图的内容。"));
     // KaTeX-generated MathML is inert, but keep image export independent of URLs.
     for (const node of [math, ...math.querySelectorAll('*')]) {
       for (const attribute of [...node.attributes]) {
         if (/^(?:href|src)$/i.test(attribute.localName) || /url\s*\(/i.test(attribute.value)) {
-          throw new Error('图片导出不支持外部链接或外部图像，请移除这些命令后重试。');
+          throw new Error(t("图片导出不支持外部链接或外部图像，请移除这些命令后重试。"));
         }
       }
     }
@@ -77,17 +115,17 @@
   }
 
   function sanitizeSvg(svg, defaultColor) {
-    if (svg.querySelector('[data-mjx-error],[data-mml-node="merror"]')) throw new Error('这条公式暂时无法转换为图片，请检查公式代码。');
+    if (svg.querySelector('[data-mjx-error],[data-mml-node="merror"]')) throw new Error(t("这条公式暂时无法转换为图片，请检查公式代码。"));
     if (svg.querySelector('text')) {
-      throw new Error('公式含有内置矢量字库暂不支持的字符（例如部分中文或特殊符号），无法保证图片一致。请改用支持的数学符号后重试。');
+      throw new Error(t("公式含有内置矢量字库暂不支持的字符（例如部分中文或特殊符号），无法保证图片一致。请改用支持的数学符号后重试。"));
     }
-    if (svg.querySelector('foreignObject,image,script,style,iframe')) throw new Error('这条公式含有无法独立保存的图像内容。');
+    if (svg.querySelector('foreignObject,image,script,style,iframe')) throw new Error(t("这条公式含有无法独立保存的图像内容。"));
     function visit(node, inheritedColor) {
       const color = node.getAttribute('color') || node.style?.getPropertyValue('color') || inheritedColor;
       for (const attribute of [...node.attributes]) {
         const name = attribute.localName, value = attribute.value;
-        if (/^on/i.test(name) || /url\s*\(/i.test(value)) throw new Error('公式含有不支持的图像样式。');
-        if ((name === 'href' || name === 'src') && !value.startsWith('#')) throw new Error('图片导出不允许依赖外部文件。');
+        if (/^on/i.test(name) || /url\s*\(/i.test(value)) throw new Error(t("公式含有不支持的图像样式。"));
+        if ((name === 'href' || name === 'src') && !value.startsWith('#')) throw new Error(t("图片导出不允许依赖外部文件。"));
         if (value.includes('currentColor')) node.setAttribute(attribute.name, value.replace(/currentColor/g, color));
         if (name.startsWith('data-') || ['class', 'tabindex', 'focusable', 'aria-hidden'].includes(name)) node.removeAttribute(attribute.name);
       }
@@ -95,17 +133,17 @@
     }
     visit(svg, defaultColor);
     // fontCache:'none' should make every glyph a path rather than a reference.
-    if (svg.querySelector('use')) throw new Error('矢量图仍包含字形引用，请重新打开 HTML 后再试。');
-    if (!svg.querySelector('path,rect,line,polygon,polyline,ellipse,circle')) throw new Error('公式没有可见内容，无法导出空白图片。');
+    if (svg.querySelector('use')) throw new Error(t("矢量图仍包含字形引用，请重新打开 HTML 后再试。"));
+    if (!svg.querySelector('path,rect,line,polygon,polyline,ellipse,circle')) throw new Error(t("公式没有可见内容，无法导出空白图片。"));
   }
 
   async function makeSvg(latex, options) {
     const settings = readOptions(options);
     const mathml = mathmlFromLatex(latex, settings.fontFamily);
-    if (!root.MathJax?.startup?.promise) throw new Error('离线图片导出组件未加载，请重新打开 HTML 文件。');
+    if (!root.MathJax?.startup?.promise) throw new Error(t("离线图片导出组件未加载，请重新打开 HTML 文件。"));
     try { await root.MathJax.startup.promise; }
-    catch { throw new Error('离线图片导出组件初始化失败，请重新打开 HTML 文件。'); }
-    if (typeof root.MathJax.mathml2svg !== 'function') throw new Error('离线矢量组件不可用，请重新打开 HTML 文件。');
+    catch { throw new Error(t("离线图片导出组件初始化失败，请重新打开 HTML 文件。")); }
+    if (typeof root.MathJax.mathml2svg !== 'function') throw new Error(t("离线矢量组件不可用，请重新打开 HTML 文件。"));
     let container;
     try {
       container = root.MathJax.mathml2svg(mathml, {
@@ -113,18 +151,18 @@
         containerWidth: 100000, scale: 1
       });
     } catch (error) {
-      throw new Error('无法生成公式图片：' + String(error.message || error).slice(0, 160));
+      throw new Error(t('无法生成公式图片：{detail}', {detail: String(error.message || error).slice(0, 160)}));
     }
     const svg = container.querySelector('svg')?.cloneNode(true);
-    if (!svg) throw new Error('未生成有效的矢量公式。');
+    if (!svg) throw new Error(t("未生成有效的矢量公式。"));
     sanitizeSvg(svg, settings.color);
     const box = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-    if (box.length !== 4 || box.some((value) => !Number.isFinite(value)) || box[2] <= 0 || box[3] <= 0) throw new Error('公式图片尺寸无效。');
+    if (box.length !== 4 || box.some((value) => !Number.isFinite(value)) || box[2] <= 0 || box[3] <= 0) throw new Error(t("公式图片尺寸无效。"));
     const pxPerUnit = settings.fontSize / 1000;
     const inset = settings.padding / pxPerUnit;
     const width = Math.ceil(box[2] * pxPerUnit + settings.padding * 2);
     const height = Math.ceil(box[3] * pxPerUnit + settings.padding * 2);
-    if (width > 100000 || height > 100000) throw new Error('公式图片过大，请拆分公式后导出。');
+    if (width > 100000 || height > 100000) throw new Error(t("公式图片过大，请拆分公式后导出。"));
     // Round the viewport to whole pixels, then expand the viewBox by the same
     // amount. Keeping both aspect ratios identical avoids transparent letterbox
     // strips at the edge of otherwise white SVGs, without stretching glyphs.
@@ -143,7 +181,7 @@
     svg.setAttribute('viewBox', expandedBox.join(' '));
     svg.setAttribute('color', settings.color);
     svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', '数学公式');
+    svg.setAttribute('aria-label', t('数学公式'));
     if (settings.background === 'white') {
       const background = document.createElementNS(SVG_NS, 'rect');
       ['x', 'y', 'width', 'height'].forEach((name, i) => background.setAttribute(name, String(expandedBox[i])));
@@ -169,7 +207,7 @@
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const signature = [137, 80, 78, 71, 13, 10, 26, 10];
     if (bytes.length < 8 || signature.some((byte, index) => bytes[index] !== byte)) {
-      throw new Error('浏览器生成的 PNG 格式无效，请改用 SVG 导出。');
+      throw new Error(t("浏览器生成的 PNG 格式无效，请改用 SVG 导出。"));
     }
     // pHYs stores pixels per metre, with unit 1. The CRC covers type + data,
     // not the length, and all integer fields use PNG's big-endian byte order.
@@ -199,7 +237,7 @@
       if (type === 'IEND') { ended = length === 0; break; }
     }
     if (!inserted || !ended || offset !== bytes.length) {
-      throw new Error('无法写入 PNG 分辨率，请改用 SVG 导出。');
+      throw new Error(t("无法写入 PNG 分辨率，请改用 SVG 导出。"));
     }
     return new Blob(parts, {type: 'image/png'});
   }
@@ -210,25 +248,25 @@
     const width = Math.ceil(vector.width * settings.pixelRatio);
     const height = Math.ceil(vector.height * settings.pixelRatio);
     if (width > MAX_DIMENSION || height > MAX_DIMENSION || width * height > MAX_PIXELS) {
-      throw new Error('PNG 尺寸过大，请降低清晰度或拆分公式；也可以导出 SVG。');
+      throw new Error(t("PNG 尺寸过大，请降低清晰度或拆分公式；也可以导出 SVG。"));
     }
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('浏览器无法创建图片画布，请改用 SVG 导出。');
+    if (!context) throw new Error(t("浏览器无法创建图片画布，请改用 SVG 导出。"));
     const url = URL.createObjectURL(vector.blob);
     try {
       const image = new Image();
       await new Promise((resolve, reject) => {
         image.onload = resolve;
-        image.onerror = () => reject(new Error('浏览器无法读取生成的矢量图，请改用 SVG 导出。'));
+        image.onerror = () => reject(new Error(t("浏览器无法读取生成的矢量图，请改用 SVG 导出。")));
         image.src = url;
       });
       if (settings.background === 'white') { context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height); }
       context.drawImage(image, 0, 0, width, height);
       const blob = await new Promise((resolve, reject) => {
-        try { canvas.toBlob((result) => result ? resolve(result) : reject(new Error('PNG 生成失败，请改用 SVG 导出。')), 'image/png'); }
-        catch { reject(new Error('浏览器无法保存 PNG，请改用 SVG 导出。')); }
+        try { canvas.toBlob((result) => result ? resolve(result) : reject(new Error(t("PNG 生成失败，请改用 SVG 导出。"))), 'image/png'); }
+        catch { reject(new Error(t("浏览器无法保存 PNG，请改用 SVG 导出。"))); }
       });
       return {blob: await withPngResolution(blob, 96 * settings.pixelRatio), width, height};
     } finally { URL.revokeObjectURL(url); canvas.width = 0; canvas.height = 0; }

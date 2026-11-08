@@ -7,6 +7,40 @@
  */
 (function (global) {
   'use strict';
+  // Local translations only; standalone conversion tests keep the Chinese fallback.
+  if (global.WordI18n) global.WordI18n.register({
+    "有无法映射的数学字体字符，请核对结果。": "Some mathematical font characters could not be mapped. Check the result.",
+    "孤立的根号未包含根式范围，请核对或使用结构化公式。": "A standalone radical does not specify its contents. Check the result or use a structured equation.",
+    "存在单独的组合符号，请核对重音或向量标记。": "A standalone combining character was found. Check accents and vector marks.",
+    "数学字体样式“{style}”暂未转换，已保留其内容。": "The mathematical font style “{style}” is not supported; its contents were preserved.",
+    "自定义括号按普通数学符号输出，请核对显示。": "Custom delimiters were converted to ordinary mathematical symbols. Check the preview.",
+    "弧形组符号使用上/下标替代，请核对显示。": "Curved grouping marks were replaced with superscripts or subscripts. Check the preview.",
+    "MathML 节点“{name}”的参数数量异常，请核对原公式。": "The MathML node “{name}” has an unexpected number of arguments. Check the original equation.",
+    "MathML 语义节点缺少可转换的表示。": "A MathML semantics node has no supported representation.",
+    "带标签的 MathML 表格保留了标签列，请核对排列。": "The label column in the MathML table was preserved. Check its alignment.",
+    "MathML 边框样式“{type}”暂未转换，已保留其内容。": "The MathML enclosure style “{type}” is not supported; its contents were preserved.",
+    "MathML 的自定义间距未完全保留，公式内容已保留。": "Custom MathML spacing was not fully preserved; the equation contents were retained.",
+    "交互式 MathML 仅转换当前选中的表达式。": "Only the currently selected expression in interactive MathML was converted.",
+    "源 MathML 含有错误标记，请核对公式。": "The source MathML contains an error marker. Check the equation.",
+    "MathML 含有图像字形，无法恢复对应公式。": "The MathML contains an image glyph whose equation cannot be recovered.",
+    "暂不支持 MathML 节点“{name}”，已尽量保留其内容。": "The MathML node “{name}” is not supported; its contents were preserved where possible.",
+    "幻影公式的自定义尺寸未保留。": "Custom dimensions of a phantom equation were not preserved.",
+    "暂不支持 Word 公式节点“{name}”，已尽量保留其内容。": "The Word equation node “{name}” is not supported; its contents were preserved where possible.",
+    "不支持带 DTD / ENTITY 的 XML。请只粘贴公式 XML。": "XML containing DTD or ENTITY declarations is not supported. Paste only the equation XML.",
+    "公式 XML 不完整或格式不合法。请重新复制完整公式，或导入 .docx 文件。": "The equation XML is incomplete or invalid. Copy the full equation again or import a .docx file.",
+    "LaTeX 花括号不配对，请检查输入。": "LaTeX braces are unbalanced. Check the input.",
+    "当前是纯文本转换：无法恢复 Word 丢失的分式、矩阵或上下标结构。请核对结果；复杂公式建议导入 .docx。": "Plain-text conversion cannot recover fractions, matrices, or script structure lost by Word. Check the result; import a .docx file for complex equations.",
+    "有缺少内容的上/下标标记。": "A superscript or subscript marker has no contents.",
+    "检测到 Word UnicodeMath 的特殊结构标记，当前未能完整解析。请导入 .docx 以保留结构。": "Word UnicodeMath structure markers were detected but could not be fully parsed. Import a .docx file to preserve their structure.",
+    "请先粘贴一个公式，或导入 .docx 文件。": "Paste an equation or import a .docx file first.",
+    "公式内容过大，请减少粘贴内容或拆分文档。": "The equation input is too large. Paste less content or split the document.",
+    "没有找到完整的 MathML / Word 公式。请重新复制公式，或导入 .docx 文件。": "No complete MathML or Word equation was found. Copy the equation again or import a .docx file.",
+    "部分公式没有可转换的内容，请核对原文。": "Some equations have no convertible contents. Check the original document.",
+    "剪贴板中含有图片；本工具不进行图片识别，图片中的公式不会转换。": "The clipboard contains images. This tool does not perform OCR, so equations in images will not be converted.",
+    "浏览器只收到了图片，无法恢复公式结构。请导入原始 .docx 文件，或在 Word 中切换为 LaTeX 后复制。": "The browser received only an image and cannot recover the equation structure. Import the original .docx file, or switch to LaTeX in Word before copying.",
+    "Unicode / 文本": "Unicode / text"
+  });
+  const t = (message, params) => global.WordI18n ? global.WordI18n.t(message, params) : message.replace(/\{(\w+)\}/g, (match, name) => params && Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match);
   const OMML = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
   const MATHML = 'http://www.w3.org/1998/Math/MathML';
   const WORD = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -80,7 +114,7 @@
   const truth = v => v === '1' || v === 'true' || v === 'on';
   const clean = text => String(text || '').replace(/\u200b|\ufeff/g, '').replace(/\u2212|\u2013/g, '-');
   const texText = s => String(s).replace(/[\\{}%#$&_~^]/g, c => ({'\\':'\\textbackslash{}','~':'\\textasciitilde{}','^':'\\textasciicircum{}'}[c] || '\\' + c));
-  function warn(ctx, message) { ctx.warnings.add(message); }
+  function warn(ctx, message) { ctx.warnings.add(t(message)); }
   function textMath(input, ctx, inStyle = false) {
     let result = '';
     const chars = Array.from(clean(input));
@@ -339,7 +373,7 @@
     }
   }
   function parseXml(source) {
-    if (/<!ENTITY\b|<!DOCTYPE\b/i.test(source)) throw new Error('不支持带 DTD / ENTITY 的 XML。请只粘贴公式 XML。');
+    if (/<!ENTITY\b|<!DOCTYPE\b/i.test(source)) throw new Error(t("不支持带 DTD / ENTITY 的 XML。请只粘贴公式 XML。"));
     const doc = new DOMParser().parseFromString(source,'application/xml');
     if (doc.getElementsByTagName('parsererror').length || local(doc.documentElement) === 'parsererror') return null;
     return doc;
@@ -381,7 +415,7 @@
       let declarations = '';
       for (const prefix of prefixes) declarations += ' xmlns:' + prefix + '="' + (prefix === 'w' ? WORD : /mml|math/.test(prefix) ? MATHML : OMML) + '"';
       const parsed = parseXml('<root' + declarations + '>' + decodeNamedEntities(fragment) + '</root>');
-      if (!parsed) throw new Error('公式 XML 不完整或格式不合法。请重新复制完整公式，或导入 .docx 文件。');
+      if (!parsed) throw new Error(t("公式 XML 不完整或格式不合法。请重新复制完整公式，或导入 .docx 文件。"));
       roots.push(...formulaRoots(parsed));
     }
     return roots;
@@ -451,14 +485,14 @@
   }
   function plainMathFragment(input,ctx) { return plainMath(input,ctx).trim(); }
   function convert(input,kind = 'auto') {
-    if (typeof input !== 'string' || !input.trim()) throw new Error('请先粘贴一个公式，或导入 .docx 文件。');
-    if (input.length > 12_000_000) throw new Error('公式内容过大，请减少粘贴内容或拆分文档。');
+    if (typeof input !== 'string' || !input.trim()) throw new Error(t("请先粘贴一个公式，或导入 .docx 文件。"));
+    if (input.length > 12_000_000) throw new Error(t("公式内容过大，请减少粘贴内容或拆分文档。"));
     const ctx = {warnings:new Set()};
     let source = input.trim();
     const hasMathMarkup = /<(?:[\w.-]+:)?(?:math|oMath)\b/i.test(source);
     if (hasMathMarkup || ['omml','mathml'].includes(kind)) {
       const roots = extractRoots(source,ctx);
-      if (!roots.length) throw new Error('没有找到完整的 MathML / Word 公式。请重新复制公式，或导入 .docx 文件。');
+      if (!roots.length) throw new Error(t("没有找到完整的 MathML / Word 公式。请重新复制公式，或导入 .docx 文件。"));
       const equations = roots.map(node => ({latex:(local(node) === 'oMath' ? omml(node,ctx) : mathml(node,ctx)).replace(/[ \t]+/g,' ').trim(),source:local(node) === 'oMath' ? 'OMML' : 'MathML'}));
       if (equations.some(eq => !eq.latex)) warn(ctx,'部分公式没有可转换的内容，请核对原文。');
       const formats = [...new Set(equations.map(eq=>eq.source))];
@@ -474,7 +508,7 @@
       fragment.querySelectorAll('br').forEach(n=>n.replaceWith('\n'));
       fragment.querySelectorAll('p,div,li,tr').forEach(n=>n.append('\n'));
       source = (fragment.textContent || '').trim();
-      if (!source) throw new Error('浏览器只收到了图片，无法恢复公式结构。请导入原始 .docx 文件，或在 Word 中切换为 LaTeX 后复制。');
+      if (!source) throw new Error(t("浏览器只收到了图片，无法恢复公式结构。请导入原始 .docx 文件，或在 Word 中切换为 LaTeX 后复制。"));
     }
     const likelyLatex = kind === 'latex' || /\\(?:[A-Za-z]+|[()[\]])/.test(source) || /^(?:\$[^]*\$)$/.test(source);
     if (likelyLatex) {
@@ -483,7 +517,7 @@
       return {equations:[{latex,source:'LaTeX'}],format:'LaTeX',warnings:[...ctx.warnings]};
     }
     const latex = plainMath(source,ctx).replace(/[ \t]+/g,' ').trim();
-    return {equations:[{latex,source:'Unicode / 文本'}],format:'Unicode / 文本',warnings:[...ctx.warnings]};
+    return {equations:[{latex,source:t('Unicode / 文本')}],format:t('Unicode / 文本'),warnings:[...ctx.warnings]};
   }
   global.WordLatex = Object.freeze({convert});
 })(typeof window !== 'undefined' ? window : globalThis);
